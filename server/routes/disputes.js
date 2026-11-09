@@ -32,7 +32,7 @@ router.get('/stats/overview', async (req, res) => {
       if (d.status === 'WAITING_FOR_SELLER_RESPONSE') return true;
       if (d.responseDeadline) {
         const diff = new Date(d.responseDeadline).getTime() - now;
-        return diff > 0 && diff <= fiveDaysMs;
+        return diff <= fiveDaysMs; // Attention required if within 5 days OR overdue
       }
       return false;
     }).length;

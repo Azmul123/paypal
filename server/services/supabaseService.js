@@ -127,11 +127,15 @@ class SupabaseService {
     if (filters.search) {
       const q = filters.search.toLowerCase();
       list = list.filter((d) =>
+        (d.id && d.id.toLowerCase().includes(q)) ||
         (d.paypalDisputeId && d.paypalDisputeId.toLowerCase().includes(q)) ||
         (d.transactionId && d.transactionId.toLowerCase().includes(q)) ||
         (d.reason && d.reason.toLowerCase().includes(q)) ||
+        (d.reasonFormatted && d.reasonFormatted.toLowerCase().includes(q)) ||
         (d.customer?.name && d.customer.name.toLowerCase().includes(q)) ||
-        (d.customer?.email && d.customer.email.toLowerCase().includes(q))
+        (d.customer?.email && d.customer.email.toLowerCase().includes(q)) ||
+        (Array.isArray(d.itemDetails) && d.itemDetails.some((i) => i.name && i.name.toLowerCase().includes(q))) ||
+        (Array.isArray(d.messages) && d.messages.some((m) => m.content && m.content.toLowerCase().includes(q)))
       );
     }
 

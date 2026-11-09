@@ -60,6 +60,16 @@ export default function DisputeDetailPage({ dispute, onBack, onNavigateToPayPal 
         </div>
       </div>
 
+      {/* Synthetic Demo Banner if source === 'demo' */}
+      {dispute.source === 'demo' && (
+        <div className="p-3.5 bg-amber-50/80 border border-amber-200/90 rounded-xl text-xs text-amber-800 flex items-center gap-2.5 shadow-2xs">
+          <AlertCircle className="w-4 h-4 text-amber-600 flex-shrink-0" />
+          <span>
+            <strong>Synthetic Sample Record:</strong> This dispute is mock sample data created for testing and workflow development. It is not an actual PayPal dispute or live customer.
+          </span>
+        </div>
+      )}
+
       {/* Main Header Card */}
       <div className="bg-white rounded-xl border border-slate-200 shadow-xs p-6">
         <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 border-b border-slate-100 pb-5">

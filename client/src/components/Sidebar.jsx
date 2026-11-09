@@ -7,20 +7,23 @@ import {
   FileCode, 
   Layers, 
   Cpu, 
-  Send,
+  Send, 
   ExternalLink,
-  CheckCircle2,
-  AlertCircle
+  X
 } from 'lucide-react';
 
-export default function Sidebar({ currentView, setCurrentView, payPalStatus }) {
+export default function Sidebar({ currentView, setCurrentView, payPalStatus, isMobileOpen, onCloseMobile }) {
   const isConnected = payPalStatus?.connected;
-  const isSandbox = payPalStatus?.isSandbox;
 
-  return (
-    <aside className="w-64 bg-slate-900 text-slate-300 flex flex-col flex-shrink-0 border-r border-slate-800 select-none">
+  const handleNavClick = (view) => {
+    setCurrentView(view);
+    if (onCloseMobile) onCloseMobile();
+  };
+
+  const navContent = (
+    <>
       {/* Brand Header */}
-      <div className="p-6 border-b border-slate-800">
+      <div className="p-6 border-b border-slate-800 flex items-center justify-between">
         <div className="flex items-center space-x-3">
           <div className="w-10 h-10 rounded-xl bg-blue-600 flex items-center justify-center text-white shadow-md shadow-blue-500/20">
             <Shield className="w-6 h-6 stroke-[2.2]" />
@@ -35,6 +38,17 @@ export default function Sidebar({ currentView, setCurrentView, payPalStatus }) {
             <p className="text-[11px] text-slate-400 font-medium">PayPal Dispute Evidence</p>
           </div>
         </div>
+
+        {/* Mobile close button */}
+        {onCloseMobile && (
+          <button
+            onClick={onCloseMobile}
+            className="lg:hidden p-1.5 rounded-lg text-slate-400 hover:text-white hover:bg-slate-800 transition-colors"
+            aria-label="Close menu"
+          >
+            <X className="w-5 h-5" />
+          </button>
+        )}
       </div>
 
       {/* Main Navigation (Module 1) */}
@@ -45,7 +59,7 @@ export default function Sidebar({ currentView, setCurrentView, payPalStatus }) {
           </div>
           <nav className="space-y-1">
             <button
-              onClick={() => setCurrentView('dashboard')}
+              onClick={() => handleNavClick('dashboard')}
               className={`w-full flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm font-medium transition-colors ${
                 currentView === 'dashboard'
                   ? 'bg-blue-600 text-white shadow-sm'
@@ -57,7 +71,7 @@ export default function Sidebar({ currentView, setCurrentView, payPalStatus }) {
             </button>
 
             <button
-              onClick={() => setCurrentView('disputes')}
+              onClick={() => handleNavClick('disputes')}
               className={`w-full flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm font-medium transition-colors ${
                 currentView === 'disputes' || currentView === 'dispute-detail'
                   ? 'bg-blue-600 text-white shadow-sm'
@@ -69,7 +83,7 @@ export default function Sidebar({ currentView, setCurrentView, payPalStatus }) {
             </button>
 
             <button
-              onClick={() => setCurrentView('paypal-connection')}
+              onClick={() => handleNavClick('paypal-connection')}
               className={`w-full flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm font-medium transition-colors ${
                 currentView === 'paypal-connection'
                   ? 'bg-blue-600 text-white shadow-sm'
@@ -81,7 +95,7 @@ export default function Sidebar({ currentView, setCurrentView, payPalStatus }) {
             </button>
 
             <button
-              onClick={() => setCurrentView('integration-docs')}
+              onClick={() => handleNavClick('integration-docs')}
               className={`w-full flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm font-medium transition-colors ${
                 currentView === 'integration-docs'
                   ? 'bg-blue-600 text-white shadow-sm'
@@ -141,7 +155,7 @@ export default function Sidebar({ currentView, setCurrentView, payPalStatus }) {
                 Sandbox
               </span>
             ) : (
-              <span className="inline-flex items-center gap-1 text-[11px] font-medium text-amber-400">
+              <span className="inline-flex items-center gap-1 text-[11px] font-medium text-amber-400" title="Synthetic sample dataset">
                 <span className="w-1.5 h-1.5 rounded-full bg-amber-400"></span>
                 Demo Mode
               </span>
@@ -149,11 +163,11 @@ export default function Sidebar({ currentView, setCurrentView, payPalStatus }) {
           </div>
 
           <p className="text-xs text-slate-300 font-medium truncate">
-            {isConnected ? 'PayPal REST Sandbox' : 'Sample Dispute Records'}
+            {isConnected ? 'PayPal REST Sandbox' : 'Synthetic Sample Records'}
           </p>
 
           <button
-            onClick={() => setCurrentView('paypal-connection')}
+            onClick={() => handleNavClick('paypal-connection')}
             className="mt-2.5 text-xs text-blue-400 hover:text-blue-300 font-medium flex items-center gap-1 transition-colors"
           >
             <span>{isConnected ? 'Manage Credentials' : 'Connect Sandbox'}</span>
@@ -161,6 +175,32 @@ export default function Sidebar({ currentView, setCurrentView, payPalStatus }) {
           </button>
         </div>
       </div>
-    </aside>
+    </>
+  );
+
+  return (
+    <>
+      {/* Desktop Persistent Sidebar */}
+      <aside className="hidden lg:flex w-64 bg-slate-900 text-slate-300 flex-col flex-shrink-0 border-r border-slate-800 select-none">
+        {navContent}
+      </aside>
+
+      {/* Mobile Drawer Backdrop */}
+      {isMobileOpen && (
+        <div 
+          onClick={onCloseMobile}
+          className="fixed inset-0 bg-slate-950/60 backdrop-blur-xs z-40 lg:hidden transition-opacity"
+        />
+      )}
+
+      {/* Mobile Slide-Out Drawer */}
+      <aside 
+        className={`fixed inset-y-0 left-0 w-64 bg-slate-900 text-slate-300 flex flex-col z-50 lg:hidden transform transition-transform duration-200 ease-in-out select-none shadow-2xl ${
+          isMobileOpen ? 'translate-x-0' : '-translate-x-full'
+        }`}
+      >
+        {navContent}
+      </aside>
+    </>
   );
 }

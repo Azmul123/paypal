@@ -18,6 +18,7 @@ export default function App() {
   const [isSyncing, setIsSyncing] = useState(false);
   const [error, setError] = useState(null);
   const [notification, setNotification] = useState(null);
+  const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false);
 
   // Filters & Sorting
   const [searchTerm, setSearchTerm] = useState('');
@@ -137,8 +138,13 @@ export default function App() {
       {/* Sidebar Navigation */}
       <Sidebar
         currentView={currentView}
-        setCurrentView={setCurrentView}
+        setCurrentView={(view) => {
+          setCurrentView(view);
+          setIsMobileMenuOpen(false);
+        }}
         payPalStatus={payPalStatus}
+        isMobileOpen={isMobileMenuOpen}
+        onCloseMobile={() => setIsMobileMenuOpen(false)}
       />
 
       {/* Main Content Area */}
@@ -150,6 +156,7 @@ export default function App() {
           onSync={handleSync}
           isSyncing={isSyncing}
           payPalStatus={payPalStatus}
+          onToggleMobileMenu={() => setIsMobileMenuOpen((prev) => !prev)}
         />
 
         {/* Floating Notification Banner */}
