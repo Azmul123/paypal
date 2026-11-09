@@ -1,10 +1,10 @@
 /**
  * FlowPilot — Module 1: Dispute Management
- * Realistic PayPal Dispute Mock Dataset
+ * Synthetic Sample Dataset for Development & Testing
  * 
- * NOTE: All records here are strictly flagged with `source: 'demo'`.
- * They represent realistic PayPal sandbox scenarios to enable development
- * and user testing without requiring live merchant credentials.
+ * NOTE: All records here are strictly synthetic sample data flagged with `source: 'demo'`.
+ * They do NOT represent actual PayPal disputes, live transactions, or real customers.
+ * They are provided to enable testing and UI integration without live credentials.
  */
 
 const mockDisputes = [
@@ -52,7 +52,7 @@ const mockDisputes = [
     ],
     sellerActionsNeeded: [
       "Provide proof of delivery with carrier tracking number",
-      "Upload signature confirmation if transaction is over $750",
+      "Verify online tracking shows delivery to recipient address (NEEDS_REVIEW: determine if carrier signature confirmation is required for this destination)",
       "Submit correspondence history with buyer"
     ],
     evidenceHandoff: {
@@ -337,7 +337,7 @@ const mockDisputes = [
     sellerActionsNeeded: [],
     evidenceHandoff: {
       evidenceCount: 4,
-      aiAnalysisStatus: "WON",
+      aiAnalysisStatus: "SUPPORTED",
       responseStatus: "ACCEPTED_BY_PAYPAL"
     }
   }

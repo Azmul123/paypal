@@ -106,7 +106,7 @@ export default function IntegrationDocsPage() {
         <div className="bg-white rounded-xl border border-slate-200 p-5 shadow-xs flex flex-col justify-between">
           <div>
             <div className="flex items-center justify-between mb-3">
-              <span className="text-[10px] font-bold uppercase tracking-wider bg-slate-100 text-slate-700 px-2 py-0.5 rounded">
+              <span className="text-[10px] font-bold uppercase tracking-wider bg-purple-50 text-purple-700 px-2 py-0.5 rounded">
                 Module 3
               </span>
               <span className="text-xs text-slate-400 font-medium">AI Intelligence Team</span>
@@ -116,13 +116,18 @@ export default function IntegrationDocsPage() {
               <h3 className="text-sm font-bold text-slate-900">AI Evidence Intelligence</h3>
             </div>
             <p className="text-xs text-slate-600 leading-relaxed">
-              Analyzes dispute reason and evidence documents. Computes merchant win-probability score, highlights evidence gaps, and recommends defense strategies.
+              Analyzes dispute requirements and merchant-provided evidence, maps evidence to applicable requirements, detects missing or contradictory information, and identifies unsupported claims with source references.
             </p>
           </div>
 
-          <div className="mt-4 pt-3 border-t border-slate-100 text-xs">
-            <span className="text-[10px] uppercase font-semibold text-slate-400 block mb-1">Contract:</span>
-            <code className="text-[11px] text-purple-600 font-mono block">FlowPilotDisputeSchema + Evidence[]</code>
+          <div className="mt-4 pt-3 border-t border-slate-100 text-xs space-y-1.5">
+            <span className="text-[10px] uppercase font-semibold text-slate-400 block">Expected Output:</span>
+            <code className="text-[10px] text-purple-600 font-mono block leading-tight">
+              &#123; evidenceMatrix, missingEvidence, contradictions, sourceReferences, unsupportedClaims, recommendedActions &#125;
+            </code>
+            <span className="text-[10px] text-slate-500 block">
+              Requirement statuses: <span className="font-semibold text-slate-700">SUPPORTED, MISSING, CONTRADICTED, NEEDS_REVIEW</span>
+            </span>
           </div>
         </div>
 

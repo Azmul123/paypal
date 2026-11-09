@@ -13,7 +13,7 @@ const router = express.Router();
 
 router.get('/contracts', (req, res) => {
   res.json({
-    version: '1.0.0',
+    version: '1.1.0',
     module: 'Module 1 — Dispute Management',
     status: 'ACTIVE_SPECIFICATION',
     owner: 'Member 1 (Lead Full-Stack Engineer)',
@@ -55,7 +55,8 @@ router.get('/contracts', (req, res) => {
       updatedAt: { type: 'ISO8601 string' },
       source: {
         type: 'string',
-        enum: ['demo', 'paypal_sandbox', 'paypal_live']
+        enum: ['demo', 'paypal_sandbox', 'paypal_live'],
+        description: 'Identifies provenance. "demo" indicates synthetic sample data for development only.'
       },
       customer: {
         name: { type: 'string' },
@@ -67,6 +68,12 @@ router.get('/contracts', (req, res) => {
         items: '{ postedBy: BUYER|SELLER|PAYPAL, senderName: string, content: string, createdAt: string }'
       }
     },
+    approvedEvidenceStatuses: [
+      'SUPPORTED',
+      'MISSING',
+      'CONTRADICTED',
+      'NEEDS_REVIEW'
+    ],
     interfacesForOtherModules: {
       module2_EvidenceManagement: {
         responsibility: 'Manage, upload, and verify documents associated with a dispute',
@@ -80,13 +87,23 @@ router.get('/contracts', (req, res) => {
         }
       },
       module3_AIEvidenceIntelligence: {
-        responsibility: 'Analyze dispute reason, evidence documents, and generate win-probability score & recommended strategy',
+        responsibility: 'Analyze dispute requirements and merchant-provided evidence, map evidence to applicable requirements, detect missing or contradictory information, and identify unsupported claims with source references.',
         requiredInput: 'dispute: FlowPilotDisputeSchema, evidence: Array<EvidenceDocument>',
+        approvedStatuses: [
+          'SUPPORTED',
+          'MISSING',
+          'CONTRADICTED',
+          'NEEDS_REVIEW'
+        ],
         expectedOutputs: {
-          winProbabilityScore: 'integer between 0 and 100',
-          recommendedStrategy: 'string',
-          missingEvidenceChecklist: 'Array<string>'
+          evidenceMatrix: 'Array<{ requirementId: string, requirementText: string, status: "SUPPORTED"|"MISSING"|"CONTRADICTED"|"NEEDS_REVIEW", evidenceRef?: string, notes?: string }>',
+          missingEvidence: 'Array<string>',
+          contradictions: 'Array<{ field: string, sourceA: string, sourceB: string, description: string }>',
+          sourceReferences: 'Array<string>',
+          unsupportedClaims: 'Array<string>',
+          recommendedActions: 'Array<string>'
         },
+        constraints: 'FlowPilot must not predict dispute outcomes, estimate probability of winning, or calculate win-probability scores.',
         availableEndpoints: {
           getDispute: 'GET /api/disputes/:id'
         }

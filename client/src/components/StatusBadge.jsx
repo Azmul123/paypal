@@ -71,9 +71,9 @@ export function SourceBadge({ source }) {
   }
 
   return (
-    <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-[11px] font-medium bg-amber-50 text-amber-700 border border-amber-200" title="This is realistic sample data. Connect PayPal Sandbox to load live disputes.">
+    <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-[11px] font-medium bg-amber-50 text-amber-700 border border-amber-200" title="Synthetic sample data for development and testing — not an actual PayPal dispute or customer record.">
       <span className="w-1.5 h-1.5 rounded-full bg-amber-500"></span>
-      Demo
+      Demo Sample
     </span>
   );
 }

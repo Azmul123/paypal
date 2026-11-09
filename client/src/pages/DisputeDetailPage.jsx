@@ -314,9 +314,9 @@ export default function DisputeDetailPage({ dispute, onBack, onNavigateToPayPal 
             moduleNumber={3}
             title="AI Evidence Intelligence"
             responsibleMember="Team Member 3"
-            description="Responsible for running AI risk scoring, merchant defense strategy generation, and evidence gap analysis."
+            description="Analyze dispute requirements and merchant-provided evidence, map evidence to applicable requirements, detect missing or contradictory information, and identify unsupported claims with source references."
             inputContract={`dispute: FlowPilotDisputeSchema, evidence: Array<Doc>`}
-            outputContract="{ winProbability: 85, recommendation: string }"
+            outputContract="{ evidenceMatrix, missingEvidence, contradictions, sourceReferences, unsupportedClaims, recommendedActions }"
             statusText="Awaiting Module 3"
           />
 

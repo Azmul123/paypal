@@ -95,8 +95,12 @@ CREATE TRIGGER trigger_disputes_modtime
 -- CREATE TABLE IF NOT EXISTS ai_evidence_analyses (
 --     id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
 --     dispute_id VARCHAR(64) REFERENCES disputes(id) ON DELETE CASCADE,
---     win_probability_score INT,
---     recommendations JSONB,
+--     evidence_matrix JSONB,       -- Array of { requirementId, requirementText, status: SUPPORTED|MISSING|CONTRADICTED|NEEDS_REVIEW, evidenceRef, notes }
+--     missing_evidence JSONB,      -- Array of strings
+--     contradictions JSONB,        -- Array of { field, sourceA, sourceB, description }
+--     source_references JSONB,     -- Array of document IDs / links
+--     unsupported_claims JSONB,    -- Array of strings
+--     recommended_actions JSONB,   -- Array of strings
 --     analyzed_at TIMESTAMPTZ DEFAULT NOW()
 -- );
 

@@ -245,7 +245,7 @@ export default function DashboardPage({ stats, recentActivity, onSelectDispute, 
             </span>
             <h5 className="font-bold text-slate-800 mt-2">AI Evidence Intelligence</h5>
             <p className="text-slate-500 text-[11px] mt-1">
-              Dispute win-probability scoring, evidence gap analysis, PayPal Seller Protection audit.
+              Requirement-to-evidence mapping, contradiction detection, missing evidence identification, and source auditing.
             </p>
           </div>
 

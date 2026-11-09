@@ -13,7 +13,7 @@ FlowPilot is built by four collaborative modules:
 
 1. **Module 1: Dispute Management (THIS MODULE)** — Ingests disputes from PayPal REST APIs, tracks deadlines, provides the merchant dashboard, and serves standardized data contracts.
 2. **Module 2: Evidence Management (Team Member 2)** — Ingests shipping tracking, carrier delivery signatures, invoices, and customer chat logs.
-3. **Module 3: AI Evidence Intelligence (Team Member 3)** — Analyzes claims, computes merchant win probabilities, and highlights evidence gaps.
+3. **Module 3: AI Evidence Intelligence (Team Member 3)** — Analyzes dispute requirements and merchant-provided evidence, maps evidence to applicable requirements, detects missing or contradictory information, and identifies unsupported claims with source references. (Note: FlowPilot does not predict dispute outcomes or calculate win probabilities).
 4. **Module 4: Dispute Response & Resolution (Team Member 4)** — Prepares the final evidence bundle and submits it to PayPal's Customer Disputes API.
 
 ---
@@ -190,25 +190,49 @@ All disputes in FlowPilot adhere to the standardized schema below:
   ],
   "sellerActionsNeeded": [
     "Upload carrier tracking number showing delivery",
-    "Submit signature confirmation if transaction is over $750"
+    "Verify online tracking shows delivery to recipient address (NEEDS_REVIEW: determine if carrier signature confirmation is required for this destination)"
   ]
 }
 ```
 
 ### Module 2: Evidence Management (Team Member 2)
-- **Role:** Upload and store carrier tracking numbers, signature proofs, and receipts.
+- **Role:** Upload, store, and verify documents associated with a dispute (carrier tracking, signature proofs, invoices, buyer communications).
 - **Input:** Call `GET /api/disputes/:id` to fetch the dispute ID, reason, and transaction details.
 - **Output:** Attach evidence document records to the dispute:
   `{ disputeId, documentType: 'PROOF_OF_DELIVERY' | 'INVOICE' | 'COMMUNICATION', storageUrl }`.
 
 ### Module 3: AI Evidence Intelligence (Team Member 3)
-- **Role:** Evaluate dispute reason against uploaded evidence and compute win-probability score.
+- **Role:** Analyze dispute requirements and merchant-provided evidence, map evidence to applicable requirements, detect missing or contradictory information, and identify unsupported claims with source references.
+- **Strict Constraint:** Do not calculate win probabilities, dispute outcome predictions, or win-probability scores.
 - **Input:** Receives `FlowPilotDisputeSchema` + `evidenceDocuments[]`.
-- **Output:** Returns `{ winProbabilityScore: 0-100, recommendedStrategy: string, missingEvidence: string[] }`.
+- **Approved Evidence Requirement Statuses:**
+  - `SUPPORTED` — Requirement is substantiated by verified evidence.
+  - `MISSING` — Required evidence has not been uploaded.
+  - `CONTRADICTED` — Conflict detected between evidence records.
+  - `NEEDS_REVIEW` — Requirement or evidence validity requires merchant review.
+- **Output:** Returns:
+  ```json
+  {
+    "evidenceMatrix": [
+      {
+        "requirementId": "req_01",
+        "requirementText": "Proof of physical delivery to buyer address",
+        "status": "SUPPORTED",
+        "evidenceRef": "doc_pod_9981",
+        "notes": "Carrier tracking marks item as delivered to customer postal code"
+      }
+    ],
+    "missingEvidence": ["Detailed merchant invoice with itemized line items"],
+    "contradictions": [],
+    "sourceReferences": ["doc_pod_9981"],
+    "unsupportedClaims": [],
+    "recommendedActions": ["Proceed to Module 4 response compilation"]
+  }
+  ```
 
 ### Module 4: Dispute Response & Resolution (Team Member 4)
 - **Role:** Compile final evidence package and submit to PayPal REST API (`POST /v1/customer-disputes/{dispute_id}/provide-evidence`).
-- **Input:** Call `GET /api/disputes/:id` and use `paypalService.getAccessToken()` from `server/services/paypalService.js`.
+- **Input:** Call `GET /api/disputes/:id`, consume Module 3's `evidenceMatrix`, and use `paypalService.getAccessToken()` from `server/services/paypalService.js`.
 - **Output:** `{ submissionStatus: 'SUBMITTED', paypalAcknowledgementId: string }`.
 
 ---

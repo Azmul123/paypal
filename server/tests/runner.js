@@ -176,6 +176,50 @@ async function runTests() {
     assert(typeof supaCheck.configured === 'boolean', 'Supabase status check returns configured boolean');
     assert(supaCheck.provider === 'in_memory' || supaCheck.provider === 'supabase', 'Database provider is identified');
 
+    // 8. Contract Correction & Evidence Integrity Validations
+    console.log('\n[Suite 8: Contract Correction & Evidence Integrity Validations]');
+    const mod3 = contractsRes.body.interfacesForOtherModules.module3_AIEvidenceIntelligence;
+
+    // A. Win-probability removal verification
+    const contractsJsonString = JSON.stringify(contractsRes.body);
+    assert(!contractsJsonString.includes('winProbabilityScore'), 'No winProbabilityScore in contracts payload');
+    assert(!contractsJsonString.includes('winProbability'), 'No winProbability in contracts payload');
+    assert(!contractsJsonString.includes('win_probability'), 'No win_probability in contracts payload');
+
+    // B. Module 3 exact outputs verification
+    const expectedOutputs = mod3.expectedOutputs;
+    assert(Boolean(expectedOutputs.evidenceMatrix), 'Module 3 outputs evidenceMatrix');
+    assert(Boolean(expectedOutputs.missingEvidence), 'Module 3 outputs missingEvidence');
+    assert(Boolean(expectedOutputs.contradictions), 'Module 3 outputs contradictions');
+    assert(Boolean(expectedOutputs.sourceReferences), 'Module 3 outputs sourceReferences');
+    assert(Boolean(expectedOutputs.unsupportedClaims), 'Module 3 outputs unsupportedClaims');
+    assert(Boolean(expectedOutputs.recommendedActions), 'Module 3 outputs recommendedActions');
+
+    // C. Approved 4 evidence statuses verification
+    const approvedStatuses = contractsRes.body.approvedEvidenceStatuses;
+    assert(Array.isArray(approvedStatuses), 'approvedEvidenceStatuses is an array');
+    assert(approvedStatuses.includes('SUPPORTED'), 'approvedEvidenceStatuses includes SUPPORTED');
+    assert(approvedStatuses.includes('MISSING'), 'approvedEvidenceStatuses includes MISSING');
+    assert(approvedStatuses.includes('CONTRADICTED'), 'approvedEvidenceStatuses includes CONTRADICTED');
+    assert(approvedStatuses.includes('NEEDS_REVIEW'), 'approvedEvidenceStatuses includes NEEDS_REVIEW');
+    assert(approvedStatuses.length === 4, 'approvedEvidenceStatuses contains exactly the 4 approved values');
+
+    // D. Module 3 responsibility text verification
+    const expectedResp = 'Analyze dispute requirements and merchant-provided evidence, map evidence to applicable requirements, detect missing or contradictory information, and identify unsupported claims with source references.';
+    assert(mod3.responsibility === expectedResp, 'Module 3 responsibility strictly matches specification');
+
+    // E. Universal evidence rules ($750 signature) removal verification
+    const inrActions = paypalService.inferActionsNeeded('MERCHANDISE_OR_SERVICE_NOT_RECEIVED', 'OPEN');
+    const inrString = JSON.stringify(inrActions);
+    assert(!inrString.includes('750'), 'No hard-coded $750 threshold in inferred evidence instructions');
+    assert(inrString.includes('NEEDS_REVIEW'), 'Uncertain evidence requirements flagged with NEEDS_REVIEW');
+
+    // F. Synthetic Demo Data Labeling Verification
+    const allDemo = listRes.body.data.every((d) => d.source === 'demo');
+    assert(allDemo, 'All sample disputes explicitly labeled with source: "demo"');
+    const noWonStatus = listRes.body.data.every((d) => d.evidenceHandoff?.aiAnalysisStatus !== 'WON');
+    assert(noWonStatus, 'No dispute record uses deprecated "WON" outcome status');
+
     console.log('\n====================================================');
     console.log(`Summary: ${passed} Passed, ${failed} Failed`);
     console.log('====================================================');

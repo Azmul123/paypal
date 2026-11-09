@@ -267,27 +267,27 @@ class PayPalService {
     switch (reason) {
       case 'MERCHANDISE_OR_SERVICE_NOT_RECEIVED':
         return [
-          'Upload carrier tracking number showing delivery',
-          'Confirm recipient delivery address matches PayPal transaction',
-          'Provide signature confirmation if order total is >= $750'
+          'Upload carrier proof of delivery with tracking number',
+          'Confirm recipient delivery address and delivery status with carrier',
+          'Review transaction details to determine if signature confirmation is applicable under PayPal policy (NEEDS_REVIEW)'
         ];
       case 'MERCHANDISE_OR_SERVICE_NOT_AS_DESCRIBED':
         return [
-          'Provide clear product specification & catalog proof',
-          'Upload return policy accepted by customer at checkout',
-          'Provide records of customer communications'
+          'Provide item specification and product listing documentation',
+          'Upload proof of return/refund policy accepted at checkout (NEEDS_REVIEW)',
+          'Provide customer communication history regarding the alleged discrepancy'
         ];
       case 'UNAUTHORISED':
         return [
-          'Submit customer login IP log matching cardholder billing address',
-          'Provide proof of multi-factor authentication (MFA)',
-          'Provide active SaaS/digital service usage logs'
+          'Provide valid proof of delivery or proof of service fulfillment',
+          'Submit customer authentication or account activity logs (NEEDS_REVIEW)',
+          'Provide verified billing and transaction correspondence'
         ];
       default:
         return [
-          'Review dispute claim details',
-          'Upload relevant merchant transaction receipts',
-          'Submit evidence before the deadline'
+          'Review specific dispute reason and PayPal guidance documentation',
+          'Compile merchant transaction receipts and customer agreements',
+          'Verify all evidence requirements prior to submission deadline (NEEDS_REVIEW)'
         ];
     }
   }
