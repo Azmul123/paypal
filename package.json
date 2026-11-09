@@ -1,0 +1,27 @@
+{
+  "name": "flowpilot",
+  "version": "1.0.0",
+  "description": "FlowPilot — AI-powered PayPal Dispute Evidence Copilot",
+  "main": "server/index.js",
+  "scripts": {
+    "install:all": "npm install && cd server && npm install && cd ../client && npm install",
+    "server": "cd server && npm run dev",
+    "client": "cd client && npm run dev",
+    "dev": "concurrently \"npm run server\" \"npm run client\"",
+    "test": "cd server && npm test",
+    "build": "cd client && npm run build"
+  },
+  "devDependencies": {
+    "concurrently": "^9.1.2"
+  },
+  "keywords": [
+    "paypal",
+    "disputes",
+    "evidence",
+    "fintech",
+    "copilot",
+    "flowpilot"
+  ],
+  "author": "FlowPilot Team",
+  "license": "MIT"
+}
