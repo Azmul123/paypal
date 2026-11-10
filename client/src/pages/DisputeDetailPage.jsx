@@ -22,6 +22,7 @@ import {
 } from 'lucide-react';
 import { StatusBadge, SourceBadge, DeadlineBadge } from '../components/StatusBadge';
 import ModuleHandoffCard from '../components/ModuleHandoffCard';
+import AIEvidenceIntelligencePanel from '../components/AIEvidenceIntelligencePanel';
 
 export default function DisputeDetailPage({ dispute, onBack, onNavigateToPayPal }) {
   const [showRawPayload, setShowRawPayload] = useState(false);
@@ -298,6 +299,9 @@ export default function DisputeDetailPage({ dispute, onBack, onNavigateToPayPal 
         </div>
       </div>
 
+      {/* Module 3: AI Evidence Intelligence Interactive Engine */}
+      <AIEvidenceIntelligencePanel dispute={dispute} />
+
       {/* Module 2, 3, 4 Integration Placeholders */}
       <div className="space-y-4 pt-4 border-t border-slate-200">
         <div>
@@ -323,11 +327,11 @@ export default function DisputeDetailPage({ dispute, onBack, onNavigateToPayPal 
           <ModuleHandoffCard
             moduleNumber={3}
             title="AI Evidence Intelligence"
-            responsibleMember="Team Member 3"
+            responsibleMember="Team Member 3 (Module 3 Active)"
             description="Analyze dispute requirements and merchant-provided evidence, map evidence to applicable requirements, detect missing or contradictory information, and identify unsupported claims with source references."
             inputContract={`dispute: FlowPilotDisputeSchema, evidence: Array<Doc>`}
             outputContract="{ evidenceMatrix, missingEvidence, contradictions, sourceReferences, unsupportedClaims, recommendedActions }"
-            statusText="Awaiting Module 3"
+            statusText="Active in FlowPilot"
           />
 
           <ModuleHandoffCard

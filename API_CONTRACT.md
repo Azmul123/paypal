@@ -206,6 +206,16 @@ interface AIEvidenceAnalysisResult {
 }
 ```
 
+### Module 3 Available Endpoints
+
+| Method | Endpoint | Description |
+|---|---|---|
+| `POST` | `/api/intelligence/analyze` | Executes complete AI analysis on dispute & evidence documents. |
+| `GET` | `/api/intelligence/analysis/:disputeId` | Retrieves cached or computed evidence analysis. |
+| `GET` | `/api/intelligence/evidence/:disputeId` | Retrieves associated evidence documents. |
+| `GET` | `/api/intelligence/requirements/:reason` | Returns applicable category requirements for a PayPal dispute reason. |
+| `POST` | `/api/intelligence/extract` | Direct fact extraction endpoint for a single document. |
+
 ---
 
 ## 6. Module 4: Dispute Response & Resolution Contract

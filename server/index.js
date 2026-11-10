@@ -10,6 +10,7 @@ const cors = require('cors');
 const disputesRouter = require('./routes/disputes');
 const paypalRouter = require('./routes/paypal');
 const integrationRouter = require('./routes/integration');
+const intelligenceRouter = require('./routes/intelligence');
 
 const app = express();
 const PORT = process.env.PORT || 5000;
@@ -39,9 +40,10 @@ app.get('/api/health', (req, res) => {
   res.json({
     status: 'healthy',
     product: 'FlowPilot',
-    module: 'Dispute Management',
-    version: '1.0.0',
+    modules: ['Dispute Management', 'AI Evidence Intelligence'],
+    version: '1.2.0',
     mode: process.env.PAYPAL_MODE || 'demo',
+    geminiConfigured: Boolean(process.env.GEMINI_API_KEY),
     timestamp: new Date().toISOString()
   });
 });
@@ -50,6 +52,7 @@ app.get('/api/health', (req, res) => {
 app.use('/api/disputes', disputesRouter);
 app.use('/api/paypal', paypalRouter);
 app.use('/api/integration', integrationRouter);
+app.use('/api/intelligence', intelligenceRouter);
 
 // 404 Handler
 app.use((req, res) => {

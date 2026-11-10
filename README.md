@@ -248,4 +248,5 @@ All disputes in FlowPilot adhere to the standardized schema below:
 | **Module Placeholders** | Explicit handoff cards for Modules 2, 3, and 4 with API contracts | ✅ Verified |
 | **PayPal Sandbox Connection** | OAuth 2.0 handshake, credential tester, secure backend proxy, live/demo toggle | ✅ Verified |
 | **Supabase Integration** | PostgreSQL schema with indexes + `@supabase/supabase-js` service + memory fallback | ✅ Verified |
-| **Automated Tests** | 43 automated integration tests covering all routes and error scenarios | ✅ 43/43 Passing |
+| **Module 3: AI Evidence Intelligence** | Gemini API fact extraction, prompt injection defense, deterministic validation, contradiction detection, and Evidence Matrix mapping | ✅ Verified |
+| **Automated Tests** | 103 automated integration tests covering Modules 1 and 3 (Suites 1–12) | ✅ 103/103 Passing |

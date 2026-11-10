@@ -75,5 +75,21 @@ export const api = {
     }),
 
   // Integration contracts
-  getIntegrationContracts: () => fetchJson('/api/integration/contracts')
+  getIntegrationContracts: () => fetchJson('/api/integration/contracts'),
+
+  // Module 3: AI Evidence Intelligence
+  analyzeEvidence: (disputeId, evidence = null) =>
+    fetchJson('/api/intelligence/analyze', {
+      method: 'POST',
+      body: JSON.stringify({ disputeId, evidence })
+    }),
+
+  getEvidenceAnalysis: (disputeId) =>
+    fetchJson(`/api/intelligence/analysis/${encodeURIComponent(disputeId)}`),
+
+  getDisputeEvidenceDocs: (disputeId) =>
+    fetchJson(`/api/intelligence/evidence/${encodeURIComponent(disputeId)}`),
+
+  getReasonRequirements: (reason) =>
+    fetchJson(`/api/intelligence/requirements/${encodeURIComponent(reason)}`)
 };
