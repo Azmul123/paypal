@@ -340,8 +340,14 @@ export default function ResponseGenerationPanel({ dispute, refreshTrigger }) {
     }
   };
 
-  const isApproved = responsePackage?.status === 'APPROVED';
-  const isSubmitted = responsePackage?.status === 'SUBMITTED';
+  const isApproved = responsePackage?.status === 'APPROVED' || responsePackage?.approval?.isApproved;
+  const isSubmitted = responsePackage?.status === 'SUBMITTED' || responsePackage?.submission?.status === 'SUBMITTED';
+  const provenance = responsePackage?.provenance || responsePackage?.narrativeSource;
+  const matrix = responsePackage?.evidenceMatrix || responsePackage?.evidenceBundle?.analysis?.evidenceMatrix || [];
+  const missing = responsePackage?.missingEvidence || responsePackage?.evidenceBundle?.analysis?.missingEvidence || [];
+  const contradictions = responsePackage?.contradictions || responsePackage?.evidenceBundle?.analysis?.contradictions || [];
+  const documents = responsePackage?.evidenceDocuments || responsePackage?.evidenceBundle?.evidenceDocuments || [];
+  const approvalMeta = responsePackage?.approvalMetadata || responsePackage?.approval;
 
   return (
     <div className="bg-white rounded-xl border border-slate-200 shadow-xs overflow-hidden">
@@ -357,7 +363,7 @@ export default function ResponseGenerationPanel({ dispute, refreshTrigger }) {
                 Module 4: Dispute Response & Resolution
               </h3>
               {responsePackage && renderStatusBadge(responsePackage.status)}
-              {responsePackage && renderProvenanceBadge(responsePackage.provenance)}
+              {responsePackage && renderProvenanceBadge(provenance)}
               {responsePackage?.version && (
                 <span className="text-[11px] font-mono text-slate-500 bg-slate-100 px-2 py-0.5 rounded border border-slate-200">
                   v{responsePackage.version}
@@ -489,19 +495,19 @@ export default function ResponseGenerationPanel({ dispute, refreshTrigger }) {
         <div className="p-6 space-y-6">
 
           {/* Section 1: Contradictions & Missing Evidence Callout (Mandatory Safeguards) */}
-          {(responsePackage.contradictions?.length > 0 || responsePackage.missingEvidence?.length > 0) && (
+          {(contradictions?.length > 0 || missing?.length > 0) && (
             <div className="space-y-3">
-              {responsePackage.contradictions?.length > 0 && (
+              {contradictions?.length > 0 && (
                 <div className="p-4 rounded-xl bg-rose-50/80 border border-rose-200/90 text-xs text-rose-900 space-y-2">
                   <div className="flex items-center gap-2 font-bold text-rose-800">
                     <AlertTriangle className="w-4 h-4 text-rose-600" />
-                    <span>Evidence Contradiction Alert ({responsePackage.contradictions.length})</span>
+                    <span>Evidence Contradiction Alert ({contradictions.length})</span>
                   </div>
                   <p className="text-[11px] text-rose-700 leading-relaxed">
                     The following contradictions were detected between merchant documents and dispute records. Submitting contradictory evidence will harm your claim.
                   </p>
                   <ul className="space-y-1.5 pl-5 list-disc text-[11px]">
-                    {responsePackage.contradictions.map((c, i) => (
+                    {contradictions.map((c, i) => (
                       <li key={i}>
                         <span className="font-semibold">{c.field || 'Discrepancy'}:</span> {c.explanation || c.message}
                         {c.expectedValue && c.actualValue && (
@@ -515,17 +521,17 @@ export default function ResponseGenerationPanel({ dispute, refreshTrigger }) {
                 </div>
               )}
 
-              {responsePackage.missingEvidence?.length > 0 && (
+              {missing?.length > 0 && (
                 <div className="p-4 rounded-xl bg-amber-50/80 border border-amber-200/90 text-xs text-amber-900 space-y-2">
                   <div className="flex items-center gap-2 font-bold text-amber-800">
                     <AlertCircle className="w-4 h-4 text-amber-600" />
-                    <span>Missing Required Evidence ({responsePackage.missingEvidence.length})</span>
+                    <span>Missing Required Evidence ({missing.length})</span>
                   </div>
                   <p className="text-[11px] text-amber-700 leading-relaxed">
                     PayPal typically expects these documents for this dispute reason. If not provided, claims may be resolved in buyer favor.
                   </p>
                   <ul className="space-y-1 pl-5 list-disc text-[11px]">
-                    {responsePackage.missingEvidence.map((m, i) => (
+                    {missing.map((m, i) => (
                       <li key={i}>
                         <span className="font-semibold">{m.requirementTitle || m.requirementId}:</span> {m.description || m.guidance}
                       </li>
@@ -676,41 +682,44 @@ export default function ResponseGenerationPanel({ dispute, refreshTrigger }) {
                 <span>Evidence Verification Matrix</span>
               </h4>
               <span className="text-[11px] text-slate-500">
-                {responsePackage.evidenceMatrix?.length || 0} requirements evaluated
+                {matrix.length} requirements evaluated
               </span>
             </div>
 
             <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-              {responsePackage.evidenceMatrix && responsePackage.evidenceMatrix.length > 0 ? (
-                responsePackage.evidenceMatrix.map((item, idx) => (
-                  <div
-                    key={idx}
-                    className="p-3.5 bg-slate-50/70 rounded-xl border border-slate-200/80 text-xs space-y-2 shadow-2xs"
-                  >
-                    <div className="flex items-start justify-between gap-2">
-                      <span className="font-bold text-slate-900 leading-snug">
-                        {item.requirementTitle || item.requirementId}
-                      </span>
-                      {renderMatrixBadge(item.status)}
-                    </div>
-                    <p className="text-[11px] text-slate-600 leading-relaxed">
-                      {item.explanation || 'Requirement evaluated against attached evidence.'}
-                    </p>
-                    {item.applicableDocuments && item.applicableDocuments.length > 0 && (
-                      <div className="flex items-center gap-1.5 flex-wrap pt-1 border-t border-slate-200/50">
-                        <span className="text-[10px] uppercase font-semibold text-slate-400">Substantiated by:</span>
-                        {item.applicableDocuments.map((docId, dIdx) => (
-                          <span
-                            key={dIdx}
-                            className="font-mono text-[10px] bg-white border border-slate-200 text-slate-700 px-1.5 py-0.5 rounded shadow-2xs"
-                          >
-                            {docId}
-                          </span>
-                        ))}
+              {matrix && matrix.length > 0 ? (
+                matrix.map((item, idx) => {
+                  const docRefs = item.applicableDocuments || (item.evidenceRef ? [item.evidenceRef] : []);
+                  return (
+                    <div
+                      key={idx}
+                      className="p-3.5 bg-slate-50/70 rounded-xl border border-slate-200/80 text-xs space-y-2 shadow-2xs"
+                    >
+                      <div className="flex items-start justify-between gap-2">
+                        <span className="font-bold text-slate-900 leading-snug">
+                          {item.requirementTitle || item.requirementText || item.requirementId}
+                        </span>
+                        {renderMatrixBadge(item.status)}
                       </div>
-                    )}
-                  </div>
-                ))
+                      <p className="text-[11px] text-slate-600 leading-relaxed">
+                        {item.explanation || item.notes || 'Requirement evaluated against attached evidence.'}
+                      </p>
+                      {docRefs.length > 0 && (
+                        <div className="flex items-center gap-1.5 flex-wrap pt-1 border-t border-slate-200/50">
+                          <span className="text-[10px] uppercase font-semibold text-slate-400">Substantiated by:</span>
+                          {docRefs.map((docId, dIdx) => (
+                            <span
+                              key={dIdx}
+                              className="font-mono text-[10px] bg-white border border-slate-200 text-slate-700 px-1.5 py-0.5 rounded shadow-2xs"
+                            >
+                              {docId}
+                            </span>
+                          ))}
+                        </div>
+                      )}
+                    </div>
+                  );
+                })
               ) : (
                 <div className="p-4 text-center text-xs text-slate-400 col-span-2 bg-slate-50 rounded-lg">
                   No evidence requirements matrix available.
@@ -724,7 +733,7 @@ export default function ResponseGenerationPanel({ dispute, refreshTrigger }) {
             <div className="flex items-center justify-between">
               <h4 className="text-xs font-bold uppercase tracking-wider text-slate-800 flex items-center gap-2">
                 <Paperclip className="w-4 h-4 text-slate-500" />
-                <span>Attached Evidence Documents ({responsePackage.evidenceDocuments?.length || 0})</span>
+                <span>Attached Evidence Documents ({documents.length})</span>
               </h4>
               <span className="text-[11px] text-slate-400 font-mono">
                 PayPal limit: 10MB per document
@@ -744,14 +753,14 @@ export default function ResponseGenerationPanel({ dispute, refreshTrigger }) {
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-slate-100">
-                  {responsePackage.evidenceDocuments && responsePackage.evidenceDocuments.length > 0 ? (
-                    responsePackage.evidenceDocuments.map((doc, idx) => (
+                  {documents && documents.length > 0 ? (
+                    documents.map((doc, idx) => (
                       <tr key={idx} className="hover:bg-slate-50/50">
                         <td className="px-4 py-2.5 font-mono text-[11px] text-blue-600 font-semibold">
                           {doc.id}
                         </td>
                         <td className="px-4 py-2.5 font-medium text-slate-900">
-                          {doc.fileName || 'document.pdf'}
+                          {doc.fileName || (doc.storageUrl ? doc.storageUrl.split('/').pop() : 'document.pdf')}
                         </td>
                         <td className="px-4 py-2.5">
                           <span className="inline-block px-2 py-0.5 rounded text-[10px] font-semibold bg-slate-100 text-slate-700 border border-slate-200">
@@ -821,17 +830,17 @@ export default function ResponseGenerationPanel({ dispute, refreshTrigger }) {
                 </div>
                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 text-[11px] text-emerald-800 pt-1">
                   <div>
-                    <span className="font-semibold">Reviewer:</span> {responsePackage.approvalMetadata?.approvedBy || 'Merchant Admin'}
+                    <span className="font-semibold">Reviewer:</span> {approvalMeta?.approvedBy || 'Merchant Admin'}
                   </div>
                   <div>
-                    <span className="font-semibold">Approved At:</span> {responsePackage.approvalMetadata?.approvedAt ? new Date(responsePackage.approvalMetadata.approvedAt).toLocaleString() : 'N/A'}
+                    <span className="font-semibold">Approved At:</span> {approvalMeta?.approvedAt ? new Date(approvalMeta.approvedAt).toLocaleString() : 'N/A'}
                   </div>
                   <div className="sm:col-span-2">
-                    <span className="font-semibold">Review Scope:</span> {responsePackage.approvalMetadata?.reviewType || 'MERCHANT_INTERNAL_REVIEW'}
+                    <span className="font-semibold">Review Scope:</span> {approvalMeta?.reviewType || 'MERCHANT_INTERNAL_REVIEW'}
                   </div>
                 </div>
                 <p className="text-[10px] text-emerald-700 italic border-t border-emerald-200/60 pt-2">
-                  {responsePackage.approvalMetadata?.legalDisclaimer || 
+                  {approvalMeta?.legalDisclaimer || 
                     'Notice: This record confirms internal merchant review and authorization. It does not constitute a legally binding cryptographic digital signature.'}
                 </p>
               </div>
