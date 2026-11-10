@@ -6,6 +6,8 @@
 require('dotenv').config();
 const express = require('express');
 const cors = require('cors');
+const path = require('path');
+const fs = require('fs');
 
 const disputesRouter = require('./routes/disputes');
 const paypalRouter = require('./routes/paypal');
@@ -56,7 +58,19 @@ app.use('/api/integration', integrationRouter);
 app.use('/api/intelligence', intelligenceRouter);
 app.use('/api/evidence', evidenceRouter);
 
-// 404 Handler
+// Serve static frontend build if available
+const clientDist = path.join(__dirname, '../client/dist');
+if (fs.existsSync(clientDist)) {
+  app.use(express.static(clientDist));
+  app.get('*', (req, res, next) => {
+    if (req.path.startsWith('/api')) {
+      return next();
+    }
+    res.sendFile(path.join(clientDist, 'index.html'));
+  });
+}
+
+// 404 Handler for unhandled API routes
 app.use((req, res) => {
   res.status(404).json({
     success: false,
