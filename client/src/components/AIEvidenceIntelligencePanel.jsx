@@ -14,7 +14,9 @@ import {
   FileCheck,
   Check,
   XCircle,
-  Clock
+  Clock,
+  BookOpen,
+  Info
 } from 'lucide-react';
 import { api } from '../api/client';
 
@@ -24,6 +26,7 @@ export default function AIEvidenceIntelligencePanel({ dispute }) {
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState(null);
   const [hasRun, setHasRun] = useState(false);
+  const [geminiConfigured, setGeminiConfigured] = useState(false);
 
   useEffect(() => {
     if (dispute?.id) {
@@ -53,6 +56,7 @@ export default function AIEvidenceIntelligencePanel({ dispute }) {
     try {
       const res = await api.analyzeEvidence(dispute.id);
       setAnalysis(res.analysis);
+      setGeminiConfigured(Boolean(res.geminiConfigured));
       setHasRun(true);
     } catch (err) {
       setError(err.message || 'AI Evidence Intelligence analysis failed.');
@@ -95,6 +99,26 @@ export default function AIEvidenceIntelligencePanel({ dispute }) {
     }
   };
 
+  const renderRequirementBadge = (req) => {
+    if (req.requirementType === 'OFFICIAL_PAYPAL') {
+      return (
+        <span 
+          className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-[10px] font-bold bg-indigo-50 text-indigo-700 border border-indigo-200"
+          title={req.sourceCitation ? `${req.sourceCitation.documentTitle} - ${req.sourceCitation.section}` : 'Official PayPal Requirement'}
+        >
+          <BookOpen className="w-3 h-3 text-indigo-600" />
+          <span>Official PayPal Requirement</span>
+        </span>
+      );
+    }
+    return (
+      <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-[10px] font-medium bg-slate-100 text-slate-700 border border-slate-200">
+        <Info className="w-3 h-3 text-slate-500" />
+        <span>FlowPilot Recommendation</span>
+      </span>
+    );
+  };
+
   return (
     <div className="bg-white rounded-xl border border-slate-200 shadow-xs overflow-hidden">
       {/* Panel Header */}
@@ -110,7 +134,7 @@ export default function AIEvidenceIntelligencePanel({ dispute }) {
             Evidence Verification & Requirement Matrix
           </h3>
           <p className="text-xs text-slate-500 mt-0.5">
-            Cross-references documents against PayPal dispute requirements and detects contradictions with source tracking.
+            Cross-references documents against verified PayPal dispute rules and detects genuine contradictions with full source provenance.
           </p>
         </div>
 
@@ -149,9 +173,18 @@ export default function AIEvidenceIntelligencePanel({ dispute }) {
           ))}
         </div>
 
-        <span className="text-[11px] text-slate-400 italic">
-          Input source: Module 2 Evidence Vault
-        </span>
+        <div className="flex items-center gap-2 text-[11px]">
+          <span className="text-slate-500">Extraction Engine:</span>
+          {geminiConfigured ? (
+            <span className="font-semibold text-emerald-700 bg-emerald-50 px-2 py-0.5 rounded border border-emerald-200">
+              Extracted by Gemini
+            </span>
+          ) : (
+            <span className="font-semibold text-slate-700 bg-slate-200/80 px-2 py-0.5 rounded border border-slate-300">
+              Deterministic fallback
+            </span>
+          )}
+        </div>
       </div>
 
       {/* Error Banner */}
@@ -182,7 +215,7 @@ export default function AIEvidenceIntelligencePanel({ dispute }) {
           /* Loading State */
           <div className="py-14 text-center space-y-3">
             <div className="w-9 h-9 border-3 border-purple-600 border-t-transparent rounded-full animate-spin mx-auto"></div>
-            <h4 className="text-sm font-semibold text-slate-800">Processing Documents with AI Engine</h4>
+            <h4 className="text-sm font-semibold text-slate-800">Processing Documents with Evidence Intelligence Engine</h4>
             <p className="text-xs text-slate-500">
               Extracting facts via Gemini API and executing deterministic cross-validation...
             </p>
@@ -195,7 +228,7 @@ export default function AIEvidenceIntelligencePanel({ dispute }) {
               <div className="p-4 rounded-xl bg-rose-50 border border-rose-200/90 space-y-2">
                 <div className="flex items-center gap-2 text-rose-900 font-bold text-xs uppercase tracking-wider">
                   <ShieldAlert className="w-4 h-4 text-rose-600" />
-                  <span>Conflicting Information Detected ({analysis.contradictions.length})</span>
+                  <span>Conflicting Transaction Information Detected ({analysis.contradictions.length})</span>
                 </div>
                 <div className="space-y-2">
                   {analysis.contradictions.map((contra, idx) => (
@@ -229,7 +262,7 @@ export default function AIEvidenceIntelligencePanel({ dispute }) {
                 <table className="w-full text-left border-collapse text-xs">
                   <thead>
                     <tr className="border-b border-slate-200 bg-slate-50/75 text-[11px] font-semibold uppercase tracking-wider text-slate-500">
-                      <th className="py-3 px-4">Requirement</th>
+                      <th className="py-3 px-4">Requirement & Policy Authority</th>
                       <th className="py-3 px-4">Status</th>
                       <th className="py-3 px-4">Evidence Reference</th>
                       <th className="py-3 px-4">Verification Findings</th>
@@ -238,8 +271,13 @@ export default function AIEvidenceIntelligencePanel({ dispute }) {
                   <tbody className="divide-y divide-slate-100">
                     {analysis.evidenceMatrix?.map((req) => (
                       <tr key={req.requirementId} className="hover:bg-slate-50/60 transition-colors">
-                        <td className="py-3 px-4 font-medium text-slate-800 max-w-xs">
-                          {req.requirementText}
+                        <td className="py-3 px-4 max-w-sm space-y-1.5">
+                          <div className="font-medium text-slate-800">
+                            {req.requirementText}
+                          </div>
+                          <div>
+                            {renderRequirementBadge(req)}
+                          </div>
                         </td>
                         <td className="py-3 px-4 whitespace-nowrap">
                           {renderStatusBadge(req.status)}
@@ -253,7 +291,7 @@ export default function AIEvidenceIntelligencePanel({ dispute }) {
                             <span className="text-slate-400 italic">None attached</span>
                           )}
                         </td>
-                        <td className="py-3 px-4 text-slate-600">
+                        <td className="py-3 px-4 text-slate-600 leading-relaxed">
                           {req.notes}
                         </td>
                       </tr>
@@ -337,7 +375,7 @@ export default function AIEvidenceIntelligencePanel({ dispute }) {
                   </span>
                 ))}
               </div>
-              <span>Status verified via Module 3 Engine</span>
+              <span className="font-medium">Evaluated under Module 3 Verification Rules</span>
             </div>
           </div>
         ) : null}

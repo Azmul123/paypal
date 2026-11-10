@@ -164,11 +164,19 @@ Every requirement in the evidence matrix must have exactly one of these four sta
 ```typescript
 interface AIEvidenceAnalysisResult {
   /**
-   * Array of requirement-to-evidence mappings
+   * Array of requirement-to-evidence mappings with verified policy citations
    */
   evidenceMatrix: Array<{
     requirementId: string;
     requirementText: string;
+    requirementType?: 'OFFICIAL_PAYPAL' | 'FLOWPILOT_RECOMMENDED';
+    sourceCitation?: {
+      documentTitle: string;
+      sourceUrl: string;
+      section: string;
+      applicableDisputeType: string;
+      retrievalDate: string;
+    };
     status: 'SUPPORTED' | 'MISSING' | 'CONTRADICTED' | 'NEEDS_REVIEW';
     evidenceRef?: string;
     notes?: string;
@@ -180,7 +188,7 @@ interface AIEvidenceAnalysisResult {
   missingEvidence: string[];
 
   /**
-   * Array of conflicting values found in records
+   * Array of conflicting values found in records (genuine transaction discrepancies)
    */
   contradictions: Array<{
     field: string;
@@ -190,7 +198,7 @@ interface AIEvidenceAnalysisResult {
   }>;
 
   /**
-   * References to original evidence documents
+   * References to original evidence documents (strictly valid IDs)
    */
   sourceReferences: string[];
 
@@ -200,7 +208,7 @@ interface AIEvidenceAnalysisResult {
   unsupportedClaims: string[];
 
   /**
-   * Practical next steps for the merchant
+   * Practical next steps for the merchant (neutral, factual next actions)
    */
   recommendedActions: string[];
 }
