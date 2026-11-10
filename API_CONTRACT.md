@@ -249,6 +249,7 @@ interface AIEvidenceAnalysisResult {
 | `POST` | `/api/response/unapprove` | Reverts approved response package back to editable DRAFT. |
 | `GET` | `/api/response/export/:disputeId` | Exports validated, downloadable JSON Defense Dossier (`?download=true`). |
 | `POST` | `/api/response/bundle/:disputeId` | Compiles raw evidence bundle without generating text. |
+| `POST` | `/api/response/submit` | Executes pre-flight validation (`dryRun: true`) or transmits multipart evidence package to PayPal Sandbox (`POST /v1/customer/disputes/{dispute_id}/provide-evidence`). |
 
 ### Module 4 Data Contracts
 

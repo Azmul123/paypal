@@ -24,6 +24,7 @@ import { StatusBadge, SourceBadge, DeadlineBadge } from '../components/StatusBad
 import ModuleHandoffCard from '../components/ModuleHandoffCard';
 import EvidenceVaultPanel from '../components/EvidenceVaultPanel';
 import AIEvidenceIntelligencePanel from '../components/AIEvidenceIntelligencePanel';
+import ResponseGenerationPanel from '../components/ResponseGenerationPanel';
 
 export default function DisputeDetailPage({ dispute, onBack, onNavigateToPayPal }) {
   const [showRawPayload, setShowRawPayload] = useState(false);
@@ -313,6 +314,12 @@ export default function DisputeDetailPage({ dispute, onBack, onNavigateToPayPal 
         refreshTrigger={evidenceRefreshCounter} 
       />
 
+      {/* Module 4: Dispute Response & Resolution Engine */}
+      <ResponseGenerationPanel 
+        dispute={dispute} 
+        refreshTrigger={evidenceRefreshCounter} 
+      />
+
       {/* Module 2, 3, 4 Integration Placeholders */}
       <div className="space-y-4 pt-4 border-t border-slate-200">
         <div>
@@ -320,7 +327,7 @@ export default function DisputeDetailPage({ dispute, onBack, onNavigateToPayPal 
             Downstream FlowPilot Modules Integration
           </h3>
           <p className="text-xs text-slate-500 mt-0.5">
-            These placeholders establish the exact contract handoff points for Module 2, Module 3, and Module 4.
+            These architecture cards confirm the completed contract handoff points for Module 2, Module 3, and Module 4.
           </p>
         </div>
 
@@ -348,11 +355,11 @@ export default function DisputeDetailPage({ dispute, onBack, onNavigateToPayPal 
           <ModuleHandoffCard
             moduleNumber={4}
             title="Dispute Response & Resolution"
-            responsibleMember="Team Member 4"
-            description="Responsible for compiling the evidence bundle and executing the official PayPal response submission API."
+            responsibleMember="Team Member 4 (Module 4 Active)"
+            description="Responsible for compiling the evidence bundle, merchant approval governance, and executing official PayPal multipart response submission."
             inputContract={`disputeId: "${dispute.id}", package: FinalEvidenceBundle`}
-            outputContract="{ submissionStatus: 'SUBMITTED', ackId: string }"
-            statusText="Awaiting Module 4"
+            outputContract="{ submissionStatus: 'SUBMITTED', ackId: string, dossierId: string }"
+            statusText="Active in FlowPilot (v4.0)"
           />
         </div>
       </div>

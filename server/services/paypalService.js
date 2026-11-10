@@ -133,7 +133,7 @@ class PayPalService {
     const baseUrl = this.getBaseUrl();
 
     try {
-      const response = await axios.get(`${baseUrl}/v1/customer-disputes`, {
+      const response = await axios.get(`${baseUrl}/v1/customer/disputes`, {
         headers: {
           'Authorization': `Bearer ${token}`,
           'Content-Type': 'application/json'
@@ -155,6 +155,7 @@ class PayPalService {
 
   /**
    * Fetches single dispute details from PayPal Customer Disputes API
+   * Official Endpoint: GET /v1/customer/disputes/{dispute_id}
    */
   async fetchPayPalDisputeById(disputeId) {
     if (!this.isConfigured()) {
@@ -165,7 +166,7 @@ class PayPalService {
     const baseUrl = this.getBaseUrl();
 
     try {
-      const response = await axios.get(`${baseUrl}/v1/customer-disputes/${disputeId}`, {
+      const response = await axios.get(`${baseUrl}/v1/customer/disputes/${encodeURIComponent(disputeId)}`, {
         headers: {
           'Authorization': `Bearer ${token}`,
           'Content-Type': 'application/json'
@@ -399,32 +400,78 @@ class PayPalService {
   }
 
   /**
-   * Maps evidence documents and narrative to PayPal's official API schema
+   * Maps evidence documents and narrative to PayPal's official API schema.
+   * Dynamically inspects the live dispute's requested evidence types (evidences[].evidence_type, source).
+   * Does NOT rely on hardcoded dispute-reason mappings when live dispute requests specific evidence types.
+   * Keeps FlowPilot's Evidence Verification Matrix separate from PayPal's official requirements.
+   * Never classifies a document as sufficient merely because its filename or type matches.
    */
-  mapEvidenceToPayPalSchema({ dispute, responsePackage, documents = [] }) {
+  mapEvidenceToPayPalSchema({ dispute, responsePackage, documents = [], liveDispute = null }) {
     const narrative = responsePackage?.narrative || '';
 
-    // Determine primary evidence type
-    let primaryEvidenceType = 'PROOF_OF_FULFILLMENT';
-    if (dispute.reason === 'MERCHANDISE_OR_SERVICE_NOT_RECEIVED') {
-      primaryEvidenceType = 'PROOF_OF_FULFILLMENT';
-    } else if (dispute.reason === 'MERCHANDISE_OR_SERVICE_NOT_AS_DESCRIBED') {
-      primaryEvidenceType = 'RETURN_POLICY';
-    } else if (dispute.reason === 'UNAUTHORISED') {
-      primaryEvidenceType = 'PROOF_OF_FULFILLMENT';
-    } else {
-      primaryEvidenceType = 'OTHER';
+    // 1. Inspect live dispute requested evidence types if present
+    const liveEvidences = liveDispute?.rawPayload?.evidences || liveDispute?.evidences || dispute?.rawPayload?.evidences || [];
+    const requestedTypes = [];
+
+    liveEvidences.forEach((ev) => {
+      // Look for evidence requested from SELLER or listed in dispute record
+      if (ev.evidence_type && (ev.source === 'PAYPAL' || ev.source === 'BUYER' || !ev.source)) {
+        requestedTypes.push(ev.evidence_type);
+      }
+    });
+
+    // 2. Select applicable evidence type: Check if available documents genuinely substantiate a requested type
+    let primaryEvidenceType = null;
+    let mappingProvenance = 'DEFAULT_CATEGORY_FALLBACK';
+
+    if (requestedTypes.length > 0) {
+      for (const reqType of requestedTypes) {
+        const canSubstantiate = documents.some((doc) => {
+          // Never classify as sufficient merely from filename: require genuine verified fields
+          if (reqType === 'PROOF_OF_FULFILLMENT' && doc.trackingNumber && doc.trackingNumber.trim().length > 3) return true;
+          if (reqType === 'PROOF_OF_DELIVERY_SIGNATURE' && doc.documentType === 'PROOF_OF_DELIVERY' && doc.trackingNumber) return true;
+          if (reqType === 'PROOF_OF_RECEIPT_COPY' && doc.documentType === 'INVOICE') return true;
+          if (reqType === 'RETURN_POLICY' && (doc.documentType === 'TERMS_AND_CONDITIONS' || doc.documentType === 'RETURN_POLICY')) return true;
+          if (reqType === 'PROOF_OF_REFUND' && doc.documentType === 'REFUND_CONFIRMATION') return true;
+          return false;
+        });
+
+        if (canSubstantiate) {
+          primaryEvidenceType = reqType;
+          mappingProvenance = 'LIVE_PAYPAL_REQUESTED_TYPE';
+          break;
+        }
+      }
+
+      if (!primaryEvidenceType) {
+        primaryEvidenceType = requestedTypes[0];
+        mappingProvenance = 'LIVE_PAYPAL_REQUESTED_UNSUBSTANTIATED';
+      }
     }
 
-    // Extract tracking info from documents
+    if (!primaryEvidenceType) {
+      // Fallback only if live dispute did not specify requested evidence types
+      if (dispute.reason === 'MERCHANDISE_OR_SERVICE_NOT_RECEIVED') {
+        primaryEvidenceType = 'PROOF_OF_FULFILLMENT';
+      } else if (dispute.reason === 'MERCHANDISE_OR_SERVICE_NOT_AS_DESCRIBED') {
+        primaryEvidenceType = 'RETURN_POLICY';
+      } else if (dispute.reason === 'UNAUTHORISED') {
+        primaryEvidenceType = 'PROOF_OF_FULFILLMENT';
+      } else {
+        primaryEvidenceType = 'OTHER';
+      }
+      mappingProvenance = 'REASON_CATEGORY_FALLBACK';
+    }
+
+    // 3. Extract verified tracking info from documents ONLY when tracking number is genuinely present
     const trackingInfoList = [];
     const validCarriers = ['FEDEX', 'UPS', 'USPS', 'DHL'];
 
     documents.forEach((doc) => {
-      if (doc.trackingNumber) {
+      if (doc.trackingNumber && typeof doc.trackingNumber === 'string' && doc.trackingNumber.trim().length > 3) {
         const rawCarrier = (doc.carrierName || '').toUpperCase().trim();
         let matchedCarrier = 'OTHER';
-        let otherCarrier = doc.carrierName || null;
+        let otherCarrier = doc.carrierName ? doc.carrierName.trim() : null;
 
         for (const c of validCarriers) {
           if (rawCarrier.includes(c)) {
@@ -447,14 +494,15 @@ class PayPalService {
       notes: narrative.slice(0, 2000)
     };
 
-    if (trackingInfoList.length > 0) {
+    if (trackingInfoList.length > 0 && (primaryEvidenceType === 'PROOF_OF_FULFILLMENT' || primaryEvidenceType === 'PROOF_OF_DELIVERY_SIGNATURE' || primaryEvidenceType === 'OTHER')) {
       evidenceEntry.evidence_info = {
         tracking_info: trackingInfoList
       };
     }
 
     return {
-      evidences: [evidenceEntry]
+      evidences: [evidenceEntry],
+      _mappingProvenance: mappingProvenance
     };
   }
 
@@ -637,13 +685,28 @@ class PayPalService {
       };
     }
 
+    // Map with live dispute requested evidence types
+    const liveInputData = this.mapEvidenceToPayPalSchema({
+      dispute,
+      responsePackage,
+      documents: docsToValidate,
+      liveDispute
+    });
+
+    const liveMultipart = this.buildMultipartPayload({
+      inputData: liveInputData,
+      fileBuffer,
+      fileName: attachmentDoc?.fileName,
+      mimeType: attachmentDoc?.mimeType
+    });
+
     // Dispatch official multipart request to Sandbox endpoint
     try {
-      const response = await axios.post(endpointUrl, payloadBuffer, {
+      const response = await axios.post(endpointUrl, liveMultipart.payloadBuffer, {
         headers: {
           'Authorization': `Bearer ${token}`,
-          'Content-Type': contentType,
-          'Content-Length': payloadBuffer.length
+          'Content-Type': liveMultipart.contentType,
+          'Content-Length': liveMultipart.payloadBuffer.length
         },
         timeout: 15000
       });

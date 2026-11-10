@@ -16,6 +16,34 @@ const BASE_URL = import.meta.env.VITE_API_URL || '';
 
 // Client-side in-memory cache for standalone demo uploads
 const clientSessionUploads = [];
+// Client-side in-memory cache for standalone demo response packages
+const clientSessionResponses = {};
+
+function createSyntheticResponse(disputeId) {
+  const analysis = getDemoAnalysis(disputeId);
+  const dispute = DEMO_DISPUTES.find(d => d.id === disputeId) || DEMO_DISPUTES[0];
+  const docs = DEMO_EVIDENCE[disputeId] || DEMO_EVIDENCE.disp_fp_101 || [];
+
+  return {
+    disputeId,
+    status: 'DRAFT',
+    version: 1,
+    provenance: 'DETERMINISTIC_FALLBACK',
+    narrative: `Merchant Dispute Response for case ${dispute.paypalDisputeId || dispute.id}.\n\nThe item was fulfilled and shipped to the address provided on the transaction (${dispute.customer?.shippingAddress?.postalCode || '97477'}). Supporting documentation (Doc IDs: ${docs.map(d => d.id).join(', ')}) confirms order fulfillment.`,
+    merchantNotes: '',
+    approved: false,
+    approvalMetadata: null,
+    evidenceMatrix: analysis.evidenceMatrix,
+    missingEvidence: analysis.missingEvidence,
+    contradictions: analysis.contradictions,
+    sourceReferences: analysis.sourceReferences,
+    unsupportedClaims: analysis.unsupportedClaims,
+    evidenceDocuments: docs,
+    createdAt: new Date().toISOString(),
+    updatedAt: new Date().toISOString(),
+    isStandaloneFallback: true
+  };
+}
 
 function getDemoFallback(url, options = {}) {
   const method = (options.method || 'GET').toUpperCase();
@@ -114,6 +142,122 @@ function getDemoFallback(url, options = {}) {
       approvedStatuses: reqs.approvedStatuses,
       requirements: reqs.requirements
     };
+  }
+
+  // 9. Module 4: Response Generation & Dossier & Pre-flight
+  if (cleanUrl === '/api/response/generate') {
+    const body = options.body ? JSON.parse(options.body) : {};
+    const id = body.disputeId || 'disp_fp_101';
+    const pkg = createSyntheticResponse(id);
+    clientSessionResponses[id] = pkg;
+    return { success: true, message: 'Defense narrative generated successfully (Demo Mode).', responsePackage: pkg, isStandaloneFallback: true };
+  }
+
+  if (cleanUrl === '/api/response/approve') {
+    const body = options.body ? JSON.parse(options.body) : {};
+    const id = body.disputeId || 'disp_fp_101';
+    const pkg = clientSessionResponses[id] || createSyntheticResponse(id);
+    pkg.status = 'APPROVED';
+    pkg.approved = true;
+    pkg.approvalMetadata = {
+      approvedBy: body.approvedBy || 'Merchant Admin Reviewer',
+      approvedAt: new Date().toISOString(),
+      reviewType: 'MERCHANT_INTERNAL_REVIEW',
+      acknowledgment: true,
+      legalDisclaimer: 'This record confirms internal merchant review and authorization. It does not constitute a legally binding cryptographic digital signature.'
+    };
+    clientSessionResponses[id] = pkg;
+    return { success: true, message: 'Response package approved by merchant.', responsePackage: pkg, isStandaloneFallback: true };
+  }
+
+  if (cleanUrl === '/api/response/unapprove') {
+    const body = options.body ? JSON.parse(options.body) : {};
+    const id = body.disputeId || 'disp_fp_101';
+    const pkg = clientSessionResponses[id] || createSyntheticResponse(id);
+    pkg.status = 'DRAFT';
+    pkg.approved = false;
+    pkg.approvalMetadata = null;
+    clientSessionResponses[id] = pkg;
+    return { success: true, message: 'Response package reverted to editable draft.', responsePackage: pkg, isStandaloneFallback: true };
+  }
+
+  if (cleanUrl.startsWith('/api/response/export/')) {
+    const id = decodeURIComponent(cleanUrl.replace('/api/response/export/', ''));
+    const pkg = clientSessionResponses[id] || createSyntheticResponse(id);
+    return {
+      success: true,
+      dossier: {
+        schemaVersion: '1.0.0',
+        dossierId: `dos_fp_${id}_${Date.now()}`,
+        disputeId: id,
+        source: 'demo',
+        isDemoRecord: true,
+        compiledAt: new Date().toISOString(),
+        merchantResponse: {
+          narrative: pkg.narrative,
+          provenance: pkg.provenance,
+          version: pkg.version
+        },
+        evidenceVerificationMatrix: pkg.evidenceMatrix,
+        missingEvidence: pkg.missingEvidence,
+        contradictions: pkg.contradictions,
+        attachedDocuments: pkg.evidenceDocuments
+      },
+      isStandaloneFallback: true
+    };
+  }
+
+  if (cleanUrl === '/api/response/submit') {
+    const body = options.body ? JSON.parse(options.body) : {};
+    const isDryRun = Boolean(body.dryRun);
+    if (isDryRun) {
+      return {
+        success: true,
+        dryRun: true,
+        status: 'PRE_FLIGHT_PASSED',
+        message: 'All pre-flight validation checks completed (Demo simulation).',
+        validationChecklist: {
+          sandboxMode: true,
+          disputeIdValid: true,
+          packageApproved: true,
+          documentsPresent: true,
+          fileSizesValid: true,
+          mimeTypesSupported: true,
+          statusEligible: true,
+          provideEvidenceLinkPresent: true
+        },
+        isStandaloneFallback: true
+      };
+    }
+    return {
+      success: false,
+      status: 'DEMO_DISPUTE_REJECTED',
+      error: 'Synthetic demo dispute cannot be submitted to PayPal Sandbox API.',
+      guidance: 'Export the validated Defense Dossier JSON package for offline review or use a real PayPal Sandbox dispute ID.',
+      isStandaloneFallback: true
+    };
+  }
+
+  if (cleanUrl.startsWith('/api/response/')) {
+    const id = decodeURIComponent(cleanUrl.replace('/api/response/', ''));
+    if (method === 'PUT') {
+      const body = options.body ? JSON.parse(options.body) : {};
+      const pkg = clientSessionResponses[id] || createSyntheticResponse(id);
+      if (body.narrative !== undefined) pkg.narrative = body.narrative;
+      if (body.merchantNotes !== undefined) pkg.merchantNotes = body.merchantNotes;
+      pkg.provenance = 'MERCHANT_EDITED';
+      pkg.version = (pkg.version || 1) + 1;
+      pkg.status = 'DRAFT';
+      pkg.approved = false;
+      pkg.approvalMetadata = null;
+      pkg.updatedAt = new Date().toISOString();
+      clientSessionResponses[id] = pkg;
+      return { success: true, message: 'Response draft updated successfully.', responsePackage: pkg, isStandaloneFallback: true };
+    }
+    if (clientSessionResponses[id]) {
+      return { success: true, responsePackage: clientSessionResponses[id], isStandaloneFallback: true };
+    }
+    return null;
   }
 
   return null;
@@ -323,5 +467,42 @@ export const api = {
       return sessionDoc.storageUrl;
     }
     return `/api/evidence/${encodeURIComponent(docId)}/file${disputeId ? `?disputeId=${encodeURIComponent(disputeId)}` : ''}`;
-  }
+  },
+
+  // Module 4: Dispute Response & Resolution
+  getResponsePackage: (disputeId) =>
+    fetchJson(`/api/response/${encodeURIComponent(disputeId)}`),
+
+  generateResponseDraft: (disputeId, options = {}) =>
+    fetchJson('/api/response/generate', {
+      method: 'POST',
+      body: JSON.stringify({ disputeId, ...options })
+    }),
+
+  updateResponseDraft: (disputeId, updates = {}) =>
+    fetchJson(`/api/response/${encodeURIComponent(disputeId)}`, {
+      method: 'PUT',
+      body: JSON.stringify(updates)
+    }),
+
+  approveResponsePackage: (disputeId, approvalData = {}) =>
+    fetchJson('/api/response/approve', {
+      method: 'POST',
+      body: JSON.stringify({ disputeId, ...approvalData })
+    }),
+
+  unapproveResponsePackage: (disputeId) =>
+    fetchJson('/api/response/unapprove', {
+      method: 'POST',
+      body: JSON.stringify({ disputeId })
+    }),
+
+  exportDefenseDossier: (disputeId, download = false) =>
+    fetchJson(`/api/response/export/${encodeURIComponent(disputeId)}${download ? '?download=true' : ''}`),
+
+  submitDisputeEvidence: (disputeId, options = {}) =>
+    fetchJson('/api/response/submit', {
+      method: 'POST',
+      body: JSON.stringify({ disputeId, ...options })
+    })
 };

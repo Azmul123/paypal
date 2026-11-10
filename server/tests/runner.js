@@ -1052,6 +1052,10 @@ Carrier: FedEx Tracking: 781294819201 Delivered`;
     assert(!constructedUrl.includes('/v1/customer-disputes/'), '16.1 Does not use deprecated /v1/customer-disputes/ path');
     assert(constructedUrl.startsWith('https://api-m.sandbox.paypal.com'), '16.1 Strictly targets PayPal Sandbox base URL');
 
+    const getDisputeEndpoint = `https://api-m.sandbox.paypal.com/v1/customer/disputes/${encodeURIComponent(testDisputeId)}`;
+    assert(getDisputeEndpoint.includes('/v1/customer/disputes/'), '16.1 Retrieval endpoint uses official /v1/customer/disputes/{id}');
+    assert(!getDisputeEndpoint.includes('/v1/customer-disputes/'), '16.1 Retrieval endpoint does not use deprecated /v1/customer-disputes/');
+
     // 16.2: Rejection of Synthetic Demo Disputes
     const demoSubmitRes = await request('/api/response/submit', {
       method: 'POST',
@@ -1152,6 +1156,28 @@ Carrier: FedEx Tracking: 781294819201 Delivered`;
     assert(mapped.evidences[0].evidence_info.tracking_info[0].carrier_name === 'FEDEX', '16.10 Normalizes carrier name to FEDEX');
     assert(mapped.evidences[0].evidence_info.tracking_info[0].tracking_number === '781294819201', '16.10 Maps exact tracking number');
     assert(mapped.evidences[0].notes.includes('Item delivered by courier'), '16.10 Maps narrative text into notes');
+
+    // 16.10b: Dynamic evidence type mapping when live dispute requests specific evidence types
+    const liveDisputeWithInvoiceReq = {
+      reason: 'MERCHANDISE_OR_SERVICE_NOT_RECEIVED',
+      evidences: [{ evidence_type: 'PROOF_OF_RECEIPT_COPY', source: 'PAYPAL' }]
+    };
+    const dynamicMapped = paypalService.mapEvidenceToPayPalSchema({
+      dispute: { reason: 'MERCHANDISE_OR_SERVICE_NOT_RECEIVED' },
+      responsePackage: { narrative: 'Item billing copy' },
+      documents: [{ documentType: 'INVOICE', fileName: 'inv.pdf' }],
+      liveDispute: liveDisputeWithInvoiceReq
+    });
+    assert(dynamicMapped.evidences[0].evidence_type === 'PROOF_OF_RECEIPT_COPY', '16.10b Uses live dispute requested evidence_type rather than hardcoded reason fallback');
+    assert(dynamicMapped._mappingProvenance === 'LIVE_PAYPAL_REQUESTED_TYPE', '16.10b Provenance identifies LIVE_PAYPAL_REQUESTED_TYPE');
+
+    // 16.10c: Does NOT claim tracking info if document does not genuinely have a tracking number
+    const noTrackingMapped = paypalService.mapEvidenceToPayPalSchema({
+      dispute: { reason: 'MERCHANDISE_OR_SERVICE_NOT_RECEIVED' },
+      responsePackage: { narrative: 'Delivery note' },
+      documents: [{ documentType: 'PROOF_OF_DELIVERY', fileName: 'pod_untracked.pdf' }]
+    });
+    assert(!noTrackingMapped.evidences[0].evidence_info?.tracking_info, '16.10c Does not fabricate tracking_info when document lacks valid tracking number');
 
     // 16.11: Pre-flight Live Status Check Rejects Non-Waiting Stage
     const liveStageCheck = paypalService.validateLivePayPalDisputePreFlight({
