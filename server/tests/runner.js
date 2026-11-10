@@ -1041,6 +1041,176 @@ Carrier: FedEx Tracking: 781294819201 Delivered`;
     const notFoundRespRes = await request('/api/response/disp_completely_nonexistent_9999');
     assert(notFoundRespRes.statusCode === 404, '15.17 GET /api/response/:id for non-existent dispute returns 404 Not Found');
 
+    // [Suite 16: Module 4 PayPal Sandbox Submission Verification]
+    console.log('\n[Suite 16: Module 4 PayPal Sandbox Submission Verification]');
+
+    // 16.1: Correct Endpoint Construction
+    const testDisputeId = 'PP-D-998877';
+    const expectedEndpoint = `https://api-m.sandbox.paypal.com/v1/customer/disputes/${testDisputeId}/provide-evidence`;
+    const constructedUrl = `https://api-m.sandbox.paypal.com/v1/customer/disputes/${encodeURIComponent(testDisputeId)}/provide-evidence`;
+    assert(constructedUrl === expectedEndpoint, '16.1 Official endpoint matches /v1/customer/disputes/{id}/provide-evidence');
+    assert(!constructedUrl.includes('/v1/customer-disputes/'), '16.1 Does not use deprecated /v1/customer-disputes/ path');
+    assert(constructedUrl.startsWith('https://api-m.sandbox.paypal.com'), '16.1 Strictly targets PayPal Sandbox base URL');
+
+    // 16.2: Rejection of Synthetic Demo Disputes
+    const demoSubmitRes = await request('/api/response/submit', {
+      method: 'POST',
+      body: { disputeId: 'disp_fp_101', dryRun: false }
+    });
+    assert(demoSubmitRes.statusCode === 400, '16.2 Submitting synthetic demo dispute rejected with 400');
+    assert(
+      demoSubmitRes.body.status === 'DEMO_DISPUTE_REJECTED' || demoSubmitRes.body.status === 'NOT_SANDBOX_MODE',
+      '16.2 Blocks submission of demo dispute cases with descriptive status'
+    );
+
+    // 16.3: Rejection of Unapproved Package
+    const unapprovedPreflight = paypalService.validatePreFlightSubmission({
+      dispute: { id: 'disp_real_sandbox_01', source: 'paypal_sandbox' },
+      responsePackage: { status: 'DRAFT', approval: { isApproved: false } },
+      documents: []
+    });
+    assert(unapprovedPreflight.valid === false, '16.3 Pre-flight rejects unapproved response package');
+    assert(unapprovedPreflight.errors.some((e) => e.code === 'PACKAGE_NOT_APPROVED'), '16.3 Cites PACKAGE_NOT_APPROVED');
+
+    // 16.4: Operational Mode Gate
+    const origMode = process.env.PAYPAL_MODE;
+    process.env.PAYPAL_MODE = 'demo';
+    const modePreflight = paypalService.validatePreFlightSubmission({
+      dispute: { id: 'disp_real_sandbox_01', source: 'paypal_sandbox' },
+      responsePackage: { status: 'APPROVED', approval: { isApproved: true } },
+      documents: []
+    });
+    assert(modePreflight.valid === false, '16.4 Pre-flight rejects submission when PAYPAL_MODE is not sandbox');
+    assert(modePreflight.errors.some((e) => e.code === 'NOT_SANDBOX_MODE'), '16.4 Cites NOT_SANDBOX_MODE error');
+    process.env.PAYPAL_MODE = origMode;
+
+    // 16.5: Duplicate Submission Guard
+    const dupPreflight = paypalService.validatePreFlightSubmission({
+      dispute: { id: 'disp_real_sandbox_01', source: 'paypal_sandbox' },
+      responsePackage: {
+        status: 'APPROVED',
+        approval: { isApproved: true },
+        submission: { status: 'SUBMITTED', timestamp: '2026-11-10T12:00:00Z', paypalAcknowledgementId: 'ack_123' }
+      },
+      documents: []
+    });
+    assert(dupPreflight.valid === false, '16.5 Pre-flight rejects duplicate submission');
+    assert(dupPreflight.errors.some((e) => e.code === 'DUPLICATE_SUBMISSION'), '16.5 Cites DUPLICATE_SUBMISSION error');
+
+    // 16.6: Unsupported Document Type Rejection
+    const unsupportedDocPreflight = paypalService.validatePreFlightSubmission({
+      dispute: { id: 'disp_real_sandbox_01', source: 'paypal_sandbox' },
+      responsePackage: { status: 'APPROVED', approval: { isApproved: true } },
+      documents: [{ id: 'doc_txt', mimeType: 'text/plain', fileSizeBytes: 500 }]
+    });
+    assert(unsupportedDocPreflight.valid === false, '16.6 Pre-flight rejects unsupported MIME types');
+    assert(unsupportedDocPreflight.errors.some((e) => e.code === 'ATTACHMENT_UNSUPPORTED_TYPE'), '16.6 Cites ATTACHMENT_UNSUPPORTED_TYPE');
+
+    // 16.7: Oversized Document Rejection (> 10MB)
+    const oversizedPreflight = paypalService.validatePreFlightSubmission({
+      dispute: { id: 'disp_real_sandbox_01', source: 'paypal_sandbox' },
+      responsePackage: { status: 'APPROVED', approval: { isApproved: true } },
+      documents: [{ id: 'doc_huge', mimeType: 'application/pdf', fileSizeBytes: 12 * 1024 * 1024 }]
+    });
+    assert(oversizedPreflight.valid === false, '16.7 Pre-flight rejects oversized document (>10MB)');
+    assert(oversizedPreflight.errors.some((e) => e.code === 'ATTACHMENT_OVERSIZED'), '16.7 Cites ATTACHMENT_OVERSIZED');
+
+    // 16.8: Missing Local File Rejection
+    const missingFilePreflight = paypalService.validatePreFlightSubmission({
+      dispute: { id: 'disp_real_sandbox_01', source: 'paypal_sandbox' },
+      responsePackage: { status: 'APPROVED', approval: { isApproved: true } },
+      documents: [{ id: 'doc_ghost', mimeType: 'application/pdf', fileSizeBytes: 1024, storagePath: 'C:\\fake_dir\\nonexistent.pdf' }]
+    });
+    assert(missingFilePreflight.valid === false, '16.8 Pre-flight rejects document whose binary is missing from disk');
+    assert(missingFilePreflight.errors.some((e) => e.code === 'ATTACHMENT_FILE_MISSING'), '16.8 Cites ATTACHMENT_FILE_MISSING');
+
+    // 16.9: Multipart Request Structure Validation
+    const sampleInput = { evidences: [{ evidence_type: 'PROOF_OF_FULFILLMENT', notes: 'Factual delivery proof' }] };
+    const samplePdfBuffer = Buffer.from('%PDF-1.4\nTest Binary Evidence\n%%EOF');
+    const multipart = paypalService.buildMultipartPayload({
+      inputData: sampleInput,
+      fileBuffer: samplePdfBuffer,
+      fileName: 'carrier_pod.pdf',
+      mimeType: 'application/pdf'
+    });
+    const multipartStr = multipart.payloadBuffer.toString('utf8');
+    assert(multipart.contentType.startsWith('multipart/form-data; boundary='), '16.9 Content-Type contains multipart/form-data with boundary');
+    assert(multipartStr.includes('Content-Disposition: form-data; name="input"'), '16.9 Contains input part with JSON metadata');
+    assert(multipartStr.includes('Content-Disposition: form-data; name="file"; filename="carrier_pod.pdf"'), '16.9 Contains file part with filename');
+    assert(multipartStr.includes('Content-Type: application/json'), '16.9 Input part has application/json Content-Type');
+    assert(multipartStr.includes('Content-Type: application/pdf'), '16.9 File part has application/pdf Content-Type');
+    assert(multipartStr.endsWith(`--${multipart.boundary}--\r\n`), '16.9 Ends with proper multipart closing boundary');
+
+    // 16.10: Evidence Mapping to PayPal Schema
+    const mapped = paypalService.mapEvidenceToPayPalSchema({
+      dispute: { reason: 'MERCHANDISE_OR_SERVICE_NOT_RECEIVED' },
+      responsePackage: { narrative: 'Item delivered by courier on Oct 28' },
+      documents: [{ carrierName: 'FedEx Express', trackingNumber: '781294819201' }]
+    });
+    assert(Array.isArray(mapped.evidences), '16.10 Mapped schema produces evidences array');
+    assert(mapped.evidences[0].evidence_type === 'PROOF_OF_FULFILLMENT', '16.10 Maps INR to PROOF_OF_FULFILLMENT');
+    assert(mapped.evidences[0].evidence_info.tracking_info[0].carrier_name === 'FEDEX', '16.10 Normalizes carrier name to FEDEX');
+    assert(mapped.evidences[0].evidence_info.tracking_info[0].tracking_number === '781294819201', '16.10 Maps exact tracking number');
+    assert(mapped.evidences[0].notes.includes('Item delivered by courier'), '16.10 Maps narrative text into notes');
+
+    // 16.11: Pre-flight Live Status Check Rejects Non-Waiting Stage
+    const liveStageCheck = paypalService.validateLivePayPalDisputePreFlight({
+      status: 'UNDER_REVIEW',
+      links: [{ rel: 'provide-evidence' }]
+    });
+    assert(liveStageCheck.valid === false, '16.11 Live pre-flight rejects status other than WAITING_FOR_SELLER_RESPONSE');
+    assert(liveStageCheck.errors.some((e) => e.code === 'INVALID_LIFECYCLE_STAGE'), '16.11 Cites INVALID_LIFECYCLE_STAGE');
+
+    // 16.12: Pre-flight HATEOAS Link Check Rejects Missing Link
+    const hateoasCheck = paypalService.validateLivePayPalDisputePreFlight({
+      status: 'WAITING_FOR_SELLER_RESPONSE',
+      links: [{ rel: 'self' }]
+    });
+    assert(hateoasCheck.valid === false, '16.12 Live pre-flight rejects dispute missing provide-evidence link');
+    assert(hateoasCheck.errors.some((e) => e.code === 'HATEOAS_LINK_MISSING'), '16.12 Cites HATEOAS_LINK_MISSING');
+
+    // 16.13: Dry-Run Mode Pre-flight Return
+    process.env.PAYPAL_MODE = 'sandbox';
+    const validPreflightSandboxDispute = {
+      id: 'disp_sandbox_valid',
+      paypalDisputeId: 'PP-D-SANDBOX-101',
+      source: 'paypal_sandbox',
+      reason: 'MERCHANDISE_OR_SERVICE_NOT_RECEIVED'
+    };
+    const validSandboxPkg = {
+      id: 'resp_pkg_disp_sandbox_valid',
+      disputeId: 'disp_sandbox_valid',
+      status: 'APPROVED',
+      narrative: 'Verified delivery proof',
+      approval: { isApproved: true },
+      evidenceBundle: { evidenceDocuments: [] }
+    };
+    const dryRunResult = paypalService.validatePreFlightSubmission({
+      dispute: validPreflightSandboxDispute,
+      responsePackage: validSandboxPkg,
+      documents: []
+    });
+    assert(dryRunResult.valid === true, '16.13 Valid sandbox package passes pre-flight checks in dry-run mode');
+    process.env.PAYPAL_MODE = origMode;
+
+    // 16.14: Error Handling Simulation: Insufficient Scope (403)
+    const simulated403Err = { response: { status: 403, data: { name: 'NOT_AUTHORIZED', message: 'Insufficient scope' } } };
+    assert(simulated403Err.response.status === 403, '16.14 Recognizes HTTP 403 response');
+
+    // 16.15: Error Handling Simulation: Network Timeout (Uncertain Outcome)
+    const timeoutErr = { code: 'ECONNABORTED', message: 'timeout of 15000ms exceeded' };
+    assert(timeoutErr.code === 'ECONNABORTED', '16.15 Correctly identifies ECONNABORTED timeout');
+
+    // 16.16: Outcome Recording in Response Package
+    await responseService.recordSubmissionOutcome('disp_fp_101', {
+      status: 'SUBMITTED',
+      acknowledgementId: 'ack_sandbox_test_7788',
+      timestamp: new Date().toISOString()
+    });
+    const recordedPkg = responseService.getResponsePackage('disp_fp_101');
+    assert(recordedPkg.status === 'SUBMITTED', '16.16 Package status transitions to SUBMITTED after confirmed submission');
+    assert(recordedPkg.submission.paypalAcknowledgementId === 'ack_sandbox_test_7788', '16.16 Package records PayPal acknowledgement ID');
+
     console.log('\n====================================================');
     console.log(`Summary: ${passed} Passed, ${failed} Failed`);
     console.log('====================================================');

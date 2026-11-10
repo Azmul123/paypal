@@ -736,6 +736,31 @@ Produce a clean, professional defense response statement with clear sections:
       errors
     };
   }
+
+  /**
+   * Records the result of a PayPal evidence submission attempt
+   */
+  async recordSubmissionOutcome(disputeId, submissionOutcome = {}) {
+    const pkg = this.catalog.get(disputeId);
+    if (!pkg) return null;
+
+    pkg.submission = {
+      status: submissionOutcome.status || 'SUBMITTED',
+      timestamp: submissionOutcome.timestamp || new Date().toISOString(),
+      paypalAcknowledgementId: submissionOutcome.acknowledgementId || null,
+      errorMessage: submissionOutcome.errorMessage || null,
+      details: submissionOutcome.details || null
+    };
+
+    if (submissionOutcome.status === 'SUBMITTED') {
+      pkg.status = 'SUBMITTED';
+    }
+
+    pkg.updatedAt = new Date().toISOString();
+    this.catalog.set(disputeId, pkg);
+    await this.enqueuePersist();
+    return pkg;
+  }
 }
 
 module.exports = new ResponseService();

@@ -227,4 +227,49 @@ router.post('/bundle/:disputeId', async (req, res) => {
   }
 });
 
+/**
+ * 8. POST /api/response/submit
+ * Submits evidence package to PayPal Customer Disputes API (Sandbox only)
+ * or performs pre-flight validation in dry-run mode
+ */
+router.post('/submit', async (req, res) => {
+  try {
+    const { disputeId, dryRun, attachmentDocId } = req.body;
+    if (!disputeId) {
+      return res.status(400).json({
+        success: false,
+        error: 'disputeId is required in request body.'
+      });
+    }
+
+    const paypalService = require('../services/paypalService');
+    const result = await paypalService.submitEvidence(disputeId, {
+      dryRun: Boolean(dryRun),
+      attachmentDocId
+    });
+
+    const statusCode = result.success ? 200 : (
+      result.status === 'PRE_FLIGHT_FAILED' ||
+      result.status === 'DEMO_DISPUTE_REJECTED' ||
+      result.status === 'PACKAGE_NOT_APPROVED' ||
+      result.status === 'DUPLICATE_SUBMISSION' ||
+      result.status === 'NOT_SANDBOX_MODE' ||
+      result.status === 'ATTACHMENT_OVERSIZED' ||
+      result.status === 'ATTACHMENT_UNSUPPORTED_TYPE' ||
+      result.status === 'ATTACHMENT_FILE_MISSING' ? 400 :
+      result.status === 'INSUFFICIENT_SCOPE' ? 403 :
+      result.status === 'INVALID_LIFECYCLE_STAGE' ||
+      result.status === 'HATEOAS_LINK_MISSING' ? 422 :
+      result.status === 'SUBMISSION_UNKNOWN' ? 504 : 502
+    );
+
+    res.status(statusCode).json(result);
+  } catch (err) {
+    res.status(500).json({
+      success: false,
+      error: err.message
+    });
+  }
+});
+
 module.exports = router;
