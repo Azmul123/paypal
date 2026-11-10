@@ -20,7 +20,7 @@ import {
 } from 'lucide-react';
 import { api } from '../api/client';
 
-export default function AIEvidenceIntelligencePanel({ dispute }) {
+export default function AIEvidenceIntelligencePanel({ dispute, refreshTrigger }) {
   const [analysis, setAnalysis] = useState(null);
   const [evidenceDocs, setEvidenceDocs] = useState([]);
   const [isLoading, setIsLoading] = useState(false);
@@ -48,7 +48,7 @@ export default function AIEvidenceIntelligencePanel({ dispute }) {
           setHasRun(false);
         });
     }
-  }, [dispute?.id]);
+  }, [dispute?.id, refreshTrigger]);
 
   const handleRunAnalysis = async () => {
     setIsLoading(true);

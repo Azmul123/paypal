@@ -91,5 +91,49 @@ export const api = {
     fetchJson(`/api/intelligence/evidence/${encodeURIComponent(disputeId)}`),
 
   getReasonRequirements: (reason) =>
-    fetchJson(`/api/intelligence/requirements/${encodeURIComponent(reason)}`)
+    fetchJson(`/api/intelligence/requirements/${encodeURIComponent(reason)}`),
+
+  // Module 2: Evidence Management (Evidence Vault)
+  uploadEvidenceDoc: async (formData) => {
+    try {
+      const res = await fetch(`${BASE_URL}/api/evidence/upload`, {
+        method: 'POST',
+        body: formData // Let browser set multipart boundary header
+      });
+      const data = await res.json().catch(() => null);
+      if (!res.ok) {
+        const errorMsg = data?.error || data?.message || `HTTP ${res.status}: ${res.statusText}`;
+        const err = new Error(errorMsg);
+        err.status = res.status;
+        err.code = data?.code;
+        err.existingDocumentId = data?.existingDocumentId;
+        err.existingFileName = data?.existingFileName;
+        throw err;
+      }
+      return data;
+    } catch (err) {
+      console.error('[API Client] Error uploading evidence:', err);
+      throw err;
+    }
+  },
+
+  getDisputeEvidence: (disputeId) =>
+    fetchJson(`/api/evidence/dispute/${encodeURIComponent(disputeId)}`),
+
+  getEvidenceDoc: (docId, disputeId = null) =>
+    fetchJson(`/api/evidence/${encodeURIComponent(docId)}${disputeId ? `?disputeId=${encodeURIComponent(disputeId)}` : ''}`),
+
+  updateEvidenceDoc: (docId, updates) =>
+    fetchJson(`/api/evidence/${encodeURIComponent(docId)}`, {
+      method: 'PUT',
+      body: JSON.stringify(updates)
+    }),
+
+  deleteEvidenceDoc: (docId, disputeId = null) =>
+    fetchJson(`/api/evidence/${encodeURIComponent(docId)}${disputeId ? `?disputeId=${encodeURIComponent(disputeId)}` : ''}`, {
+      method: 'DELETE'
+    }),
+
+  getEvidenceFileUrl: (docId, disputeId = null) =>
+    `/api/evidence/${encodeURIComponent(docId)}/file${disputeId ? `?disputeId=${encodeURIComponent(disputeId)}` : ''}`
 };

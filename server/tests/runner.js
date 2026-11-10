@@ -10,6 +10,8 @@ const supabaseService = require('../services/supabaseService');
 const geminiService = require('../services/geminiService');
 const evidenceValidator = require('../services/evidenceValidator');
 const evidenceIntelligenceService = require('../services/evidenceIntelligenceService');
+const evidenceService = require('../services/evidenceService');
+const storageService = require('../services/storageService');
 
 let server;
 const PORT = 5099;
@@ -55,6 +57,63 @@ function request(path, options = {}) {
   });
 }
 
+function requestMultipart(path, fields = {}, file = null) {
+  const boundary = '----FlowPilotFormBoundary' + Math.random().toString(36).substring(2);
+  const parts = [];
+
+  for (const [key, val] of Object.entries(fields)) {
+    parts.push(Buffer.from(`--${boundary}\r\nContent-Disposition: form-data; name="${key}"\r\n\r\n${val}\r\n`));
+  }
+
+  if (file) {
+    const filename = file.filename || 'document.pdf';
+    const contentType = file.contentType || 'application/pdf';
+    parts.push(Buffer.from(`--${boundary}\r\nContent-Disposition: form-data; name="file"; filename="${filename}"\r\nContent-Type: ${contentType}\r\n\r\n`));
+    parts.push(Buffer.isBuffer(file.buffer) ? file.buffer : Buffer.from(file.buffer || ''));
+    parts.push(Buffer.from('\r\n'));
+  }
+
+  parts.push(Buffer.from(`--${boundary}--\r\n`));
+  const fullBody = Buffer.concat(parts);
+
+  return new Promise((resolve, reject) => {
+    const req = http.request(
+      {
+        hostname: '127.0.0.1',
+        port: PORT,
+        path: path,
+        method: 'POST',
+        headers: {
+          'Content-Type': `multipart/form-data; boundary=${boundary}`,
+          'Content-Length': fullBody.length
+        }
+      },
+      (res) => {
+        let body = '';
+        res.on('data', (chunk) => (body += chunk));
+        res.on('end', () => {
+          try {
+            resolve({
+              statusCode: res.statusCode,
+              headers: res.headers,
+              body: body ? JSON.parse(body) : null
+            });
+          } catch (e) {
+            resolve({
+              statusCode: res.statusCode,
+              headers: res.headers,
+              rawBody: body
+            });
+          }
+        });
+      }
+    );
+    req.on('error', reject);
+    req.write(fullBody);
+    req.end();
+  });
+}
+
 let passed = 0;
 let failed = 0;
 
@@ -72,6 +131,14 @@ async function runTests() {
   console.log('====================================================');
   console.log('🧪 FlowPilot Automated Test Suite (Modules 1 & 3)');
   console.log('====================================================\n');
+
+  const fs = require('fs');
+  const path = require('path');
+  const metadataPath = path.resolve(__dirname, '../data/evidence_metadata.json');
+  if (fs.existsSync(metadataPath)) {
+    fs.writeFileSync(metadataPath, '[]', 'utf8');
+  }
+  evidenceService.initCatalog();
 
   server = app.listen(PORT);
 
@@ -562,6 +629,200 @@ Carrier: FedEx Tracking: 781294819201 Delivered`;
     assert(postEval.isPostDisputeDelivery === true, '13.11 Identifies delivery after dispute creation');
     assert(postEval.recommendation.includes('procedure'), '13.11 Provides neutral dispute procedure recommendation without closure claims');
 
+    // 14. Module 2: Evidence Management (Evidence Vault) Dedicated Suite
+    console.log('\n[Suite 14: Module 2 Evidence Management & Vault Security Suite]');
+
+    const runId = Date.now() + '_' + Math.random().toString(36).slice(2);
+    const pdfBuffer = Buffer.from('%PDF-1.5\n%Synthetic Test PDF: ' + runId + '\n%%EOF');
+    const pngBuffer = Buffer.concat([Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]), Buffer.from('png_' + runId)]);
+    const jpgBuffer = Buffer.concat([Buffer.from([0xff, 0xd8, 0xff]), Buffer.from('jpeg_' + runId)]);
+
+    // 14.1: Valid PDF Upload
+    const uploadPdfRes = await requestMultipart('/api/evidence/upload', {
+      disputeId: sampleDispute.id,
+      documentType: 'PROOF_OF_DELIVERY',
+      carrierName: 'FedEx',
+      trackingNumber: '781294819201'
+    }, {
+      filename: 'official_pod.pdf',
+      contentType: 'application/pdf',
+      buffer: pdfBuffer
+    });
+    assert(uploadPdfRes.statusCode === 201, '14.1 Valid PDF upload returns 201 Created');
+    assert(Boolean(uploadPdfRes.body.document), '14.1 Returns document object');
+    assert(uploadPdfRes.body.document.id.startsWith('doc_ev_'), '14.1 Stable ID generated starting with doc_ev_');
+    assert(uploadPdfRes.body.document.source === 'merchant_upload', '14.1 Tagged strictly as source: merchant_upload');
+    const uploadedPdfId = uploadPdfRes.body.document.id;
+
+    // 14.2: Valid PNG Upload
+    const uploadPngRes = await requestMultipart('/api/evidence/upload', {
+      disputeId: sampleDispute.id,
+      documentType: 'INVOICE'
+    }, {
+      filename: 'receipt.png',
+      contentType: 'image/png',
+      buffer: pngBuffer
+    });
+    assert(uploadPngRes.statusCode === 201, '14.2 Valid PNG upload returns 201 Created');
+    assert(uploadPngRes.body.document.mimeType === 'image/png', '14.2 MIME type verified as image/png');
+
+    // 14.3: Valid JPEG Upload
+    const uploadJpgRes = await requestMultipart('/api/evidence/upload', {
+      disputeId: sampleDispute.id,
+      documentType: 'OTHER'
+    }, {
+      filename: 'delivery_door.jpg',
+      contentType: 'image/jpeg',
+      buffer: jpgBuffer
+    });
+    assert(uploadJpgRes.statusCode === 201, '14.3 Valid JPEG upload returns 201 Created');
+    assert(uploadJpgRes.body.document.mimeType === 'image/jpeg', '14.3 MIME type verified as image/jpeg');
+
+    // 14.4: MIME Spoofing Defense
+    const spoofedBuffer = Buffer.from('Plain text contents disguised as a PDF file.');
+    const spoofRes = await requestMultipart('/api/evidence/upload', {
+      disputeId: sampleDispute.id,
+      documentType: 'PROOF_OF_DELIVERY'
+    }, {
+      filename: 'fake_invoice.pdf',
+      contentType: 'application/pdf',
+      buffer: spoofedBuffer
+    });
+    assert(spoofRes.statusCode === 400, '14.4 Disguised plain text rejected with 400 Bad Request');
+    assert(spoofRes.body.error.includes('signature'), '14.4 Rejection explicitly cites invalid file signature');
+
+    // 14.5: Oversized File (>10MB)
+    const bigBuffer = Buffer.alloc(10.5 * 1024 * 1024, '%PDF');
+    const bigRes = await requestMultipart('/api/evidence/upload', {
+      disputeId: sampleDispute.id,
+      documentType: 'INVOICE'
+    }, {
+      filename: 'oversized.pdf',
+      contentType: 'application/pdf',
+      buffer: bigBuffer
+    });
+    assert(bigRes.statusCode === 413, '14.5 File > 10MB rejected with 413 Payload Too Large');
+
+    // 14.6: Missing Dispute ID
+    const noDisputeRes = await requestMultipart('/api/evidence/upload', {}, {
+      filename: 'doc.pdf',
+      contentType: 'application/pdf',
+      buffer: pdfBuffer
+    });
+    assert(noDisputeRes.statusCode === 400, '14.6 Upload missing disputeId rejected with 400 Bad Request');
+
+    // 14.7: Unknown Dispute ID
+    const badDisputeRes = await requestMultipart('/api/evidence/upload', {
+      disputeId: 'disp_nonexistent_9999'
+    }, {
+      filename: 'doc.pdf',
+      contentType: 'application/pdf',
+      buffer: pdfBuffer
+    });
+    assert(badDisputeRes.statusCode === 404, '14.7 Upload with non-existent disputeId rejected with 404 Not Found');
+
+    // 14.8: Duplicate Upload Detection (SHA-256)
+    const dupRes = await requestMultipart('/api/evidence/upload', {
+      disputeId: sampleDispute.id,
+      documentType: 'PROOF_OF_DELIVERY'
+    }, {
+      filename: 'official_pod_duplicate.pdf',
+      contentType: 'application/pdf',
+      buffer: pdfBuffer
+    });
+    assert(dupRes.statusCode === 409, '14.8 Identical binary uploaded to same dispute returns 409 Conflict');
+    assert(dupRes.body.code === 'DUPLICATE_DOCUMENT', '14.8 Conflict specifies DUPLICATE_DOCUMENT code');
+    assert(dupRes.body.existingDocumentId === uploadedPdfId, '14.8 References existing document ID');
+
+    // 14.9: Cross-Dispute Document Access Guard
+    const crossAccess = await request(`/api/evidence/${uploadedPdfId}/file?disputeId=disp_fp_102`);
+    assert(crossAccess.statusCode === 403, '14.9 Accessing document under conflicting disputeId rejected with 403 Forbidden');
+
+    // 14.10: Path Traversal Defense
+    const traversalRes = await requestMultipart('/api/evidence/upload', {
+      disputeId: sampleDispute.id,
+      documentType: 'OTHER'
+    }, {
+      filename: '../../etc/passwd.pdf',
+      contentType: 'application/pdf',
+      buffer: Buffer.from('%PDF-1.4\nSafe traversal test content: ' + runId)
+    });
+    if (traversalRes.statusCode !== 201) {
+      console.error('DEBUG 14.10:', traversalRes.statusCode, traversalRes.body);
+    }
+    assert(traversalRes.statusCode === 201, '14.10 Filename with traversal characters accepted safely');
+    assert(!traversalRes.body.document.fileName.includes('..'), '14.10 Traversal sequences stripped from stored filename');
+
+    // 14.11: Secure File Streaming
+    const streamRes = await request(`/api/evidence/${uploadedPdfId}/file`);
+    assert(streamRes.statusCode === 200, '14.11 GET /api/evidence/:id/file returns 200 OK');
+    assert(streamRes.headers['content-type'] === 'application/pdf', '14.11 Streams with correct Content-Type: application/pdf');
+    assert(streamRes.headers['x-content-type-options'] === 'nosniff', '14.11 Includes X-Content-Type-Options: nosniff header');
+
+    // 14.12: PUT Metadata Update
+    const putRes = await request(`/api/evidence/${uploadedPdfId}`, {
+      method: 'PUT',
+      body: {
+        documentType: 'PROOF_OF_DELIVERY',
+        carrierName: 'FedEx Express Overnight',
+        trackingNumber: '781294819299',
+        merchantNotes: 'Updated tracking slip with confirmed delivery date'
+      }
+    });
+    assert(putRes.statusCode === 200, '14.12 PUT /api/evidence/:id returns 200 OK');
+    assert(putRes.body.document.carrierName === 'FedEx Express Overnight', '14.12 Updates carrier name');
+    assert(putRes.body.document.trackingNumber === '781294819299', '14.12 Updates tracking number');
+
+    // 14.13: Document Deletion & Storage Cleanup
+    const delRes = await request(`/api/evidence/${uploadedPdfId}`, { method: 'DELETE' });
+    assert(delRes.statusCode === 200, '14.13 DELETE /api/evidence/:id returns 200 OK');
+    const getDeleted = await request(`/api/evidence/${uploadedPdfId}`);
+    assert(getDeleted.statusCode === 404, '14.13 Document is removed from catalog (404 Not Found)');
+
+    // 14.14: Concurrency-Safe Metadata Persistence Across Server Restart
+    const persistUpload = await evidenceService.uploadDocument({
+      disputeId: sampleDispute.id,
+      fileBuffer: Buffer.from('%PDF-1.4\nPersistent Restart Document Test: ' + runId + '\n%%EOF'),
+      fileName: 'restart_test.pdf',
+      mimeType: 'application/pdf',
+      documentType: 'INVOICE'
+    });
+    // Create new EvidenceService instance pointing to same file to simulate clean server reboot
+    const EvidenceServiceClass = evidenceService.constructor;
+    const freshService = new EvidenceServiceClass(evidenceService.metadataPath);
+    const restoredDoc = freshService.getDocumentById(persistUpload.id);
+    assert(Boolean(restoredDoc), '14.14 Document metadata restored cleanly from disk catalog across restart simulation');
+    assert(restoredDoc.id === persistUpload.id, '14.14 Restored document preserves stable ID');
+
+    // 14.15: Anti-Contamination (Isolation) Check
+    const isolationUpload = await evidenceService.uploadDocument({
+      disputeId: 'disp_fp_103',
+      fileBuffer: Buffer.from('%PDF-1.4\nReal Merchant Upload for disp_fp_103: ' + runId + '\n%%EOF'),
+      fileName: 'real_merchant_doc.pdf',
+      mimeType: 'application/pdf',
+      documentType: 'PROOF_OF_DELIVERY'
+    });
+    const isolatedDocs = evidenceService.getDocumentsForDispute('disp_fp_103');
+    assert(isolatedDocs.length >= 1, '14.15 When real merchant upload exists, returns real documents');
+    assert(isolatedDocs.some((d) => d.id === isolationUpload.id), '14.15 Uploaded document is present');
+    assert(isolatedDocs.every((d) => d.source === 'merchant_upload'), '14.15 All returned documents strictly have source: merchant_upload');
+    const noDemoDocs = isolatedDocs.every((d) => d.source !== 'demo');
+    assert(noDemoDocs, '14.15 Zero synthetic demo fixtures returned when real merchant documents exist');
+
+    // 14.16: Empty Evidence Collection Handling in Module 3
+    const emptyAnalysis = await evidenceIntelligenceService.analyzeDisputeEvidence(sampleDispute, []);
+    assert(Array.isArray(emptyAnalysis.evidenceMatrix), '14.16 Module 3 accepts empty merchant evidence collection');
+    const allMissing = emptyAnalysis.evidenceMatrix.every((m) => m.status === 'MISSING' || m.status === 'NEEDS_REVIEW');
+    assert(allMissing, '14.16 All requirements evaluate to MISSING or NEEDS_REVIEW with zero uploaded evidence');
+    assert(emptyAnalysis.sourceReferences.length === 0, '14.16 sourceReferences is strictly empty array with 0 evidence');
+    assert(emptyAnalysis.contradictions.length === 0, '14.16 Zero false contradictions generated from empty evidence');
+
+    // 14.17: Full Regression Check
+    const finalHealth = await request('/api/health');
+    assert(finalHealth.body.modules.includes('Evidence Management'), '14.17 Health check reports Evidence Management active');
+    assert(finalHealth.body.modules.includes('AI Evidence Intelligence'), '14.17 Health check reports AI Evidence Intelligence active');
+    assert(finalHealth.body.modules.includes('Dispute Management'), '14.17 Health check reports Dispute Management active');
+
     console.log('\n====================================================');
     console.log(`Summary: ${passed} Passed, ${failed} Failed`);
     console.log('====================================================');
@@ -573,7 +834,10 @@ Carrier: FedEx Tracking: 781294819201 Delivered`;
     console.error('Test execution error:', err);
     process.exit(1);
   } finally {
-    server.close();
+    if (server) server.close();
+    if (fs.existsSync(metadataPath)) {
+      fs.writeFileSync(metadataPath, '[]', 'utf8');
+    }
   }
 }
 

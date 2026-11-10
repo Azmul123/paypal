@@ -15,6 +15,7 @@ const router = express.Router();
 const evidenceIntelligenceService = require('../services/evidenceIntelligenceService');
 const geminiService = require('../services/geminiService');
 const supabaseService = require('../services/supabaseService');
+const evidenceService = require('../services/evidenceService');
 const { getSyntheticEvidenceForDispute } = require('../services/mockEvidence');
 
 // In-memory cache for computed analyses
@@ -148,7 +149,7 @@ router.get('/analysis/:disputeId', async (req, res) => {
  */
 router.get('/evidence/:disputeId', (req, res) => {
   const { disputeId } = req.params;
-  const docs = getSyntheticEvidenceForDispute(disputeId);
+  const docs = evidenceService.getDocumentsForDispute(disputeId);
   res.json({
     success: true,
     disputeId,

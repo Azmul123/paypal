@@ -22,10 +22,12 @@ import {
 } from 'lucide-react';
 import { StatusBadge, SourceBadge, DeadlineBadge } from '../components/StatusBadge';
 import ModuleHandoffCard from '../components/ModuleHandoffCard';
+import EvidenceVaultPanel from '../components/EvidenceVaultPanel';
 import AIEvidenceIntelligencePanel from '../components/AIEvidenceIntelligencePanel';
 
 export default function DisputeDetailPage({ dispute, onBack, onNavigateToPayPal }) {
   const [showRawPayload, setShowRawPayload] = useState(false);
+  const [evidenceRefreshCounter, setEvidenceRefreshCounter] = useState(0);
 
   if (!dispute) {
     return (
@@ -299,8 +301,17 @@ export default function DisputeDetailPage({ dispute, onBack, onNavigateToPayPal 
         </div>
       </div>
 
+      {/* Module 2: Evidence Management (Evidence Vault) */}
+      <EvidenceVaultPanel 
+        dispute={dispute} 
+        onEvidenceChanged={() => setEvidenceRefreshCounter((c) => c + 1)} 
+      />
+
       {/* Module 3: AI Evidence Intelligence Interactive Engine */}
-      <AIEvidenceIntelligencePanel dispute={dispute} />
+      <AIEvidenceIntelligencePanel 
+        dispute={dispute} 
+        refreshTrigger={evidenceRefreshCounter} 
+      />
 
       {/* Module 2, 3, 4 Integration Placeholders */}
       <div className="space-y-4 pt-4 border-t border-slate-200">
@@ -317,11 +328,11 @@ export default function DisputeDetailPage({ dispute, onBack, onNavigateToPayPal 
           <ModuleHandoffCard
             moduleNumber={2}
             title="Evidence Management"
-            responsibleMember="Team Member 2"
+            responsibleMember="Team Member 2 (Module 2 Active)"
             description="Responsible for ingesting shipping carriers, signature proofs, and invoice attachments for this dispute."
             inputContract={`disputeId: "${dispute.id}", paypalDisputeId: "${dispute.paypalDisputeId}"`}
-            outputContract="evidenceDocuments: Array<{ id, type, url }>"
-            statusText="Awaiting Module 2"
+            outputContract="evidenceDocuments: Array<{ id, type, storageUrl, mimeType, fileSizeBytes, source, provenance }>"
+            statusText="Active in FlowPilot"
           />
 
           <ModuleHandoffCard

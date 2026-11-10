@@ -25,3 +25,8 @@ yarn-error.log*
 Thumbs.db
 .vscode/
 .idea/
+
+# Uploaded merchant evidence storage & temp files
+server/uploads/
+server/data/*.tmp*
+server/data/*.corrupted*

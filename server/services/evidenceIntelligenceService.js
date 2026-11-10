@@ -38,10 +38,11 @@ class EvidenceIntelligenceService {
       throw new Error('A valid dispute object is required for AI evidence analysis.');
     }
 
-    // 1. Resolve Evidence Documents (passed by caller, or synthetic documents from repository)
+    // 1. Resolve Evidence Documents (passed by caller, or retrieved from evidence repository)
     let evidenceDocs = providedEvidence;
-    if (!Array.isArray(evidenceDocs) || evidenceDocs.length === 0) {
-      evidenceDocs = getSyntheticEvidenceForDispute(dispute.id || dispute.paypalDisputeId);
+    if (evidenceDocs === null || evidenceDocs === undefined) {
+      const evidenceService = require('./evidenceService');
+      evidenceDocs = evidenceService.getDocumentsForDispute(dispute.id || dispute.paypalDisputeId);
     }
 
     // 2. Extract verified facts from evidence documents using Gemini (or deterministic fallback)
