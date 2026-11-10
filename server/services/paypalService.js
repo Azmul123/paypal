@@ -20,23 +20,42 @@ const path = require('path');
  * Reference: https://developer.paypal.com/docs/api/customer-disputes/v1/#disputes_provide_evidence
  */
 const KNOWN_PAYPAL_EVIDENCE_TYPES = new Set([
+  // Core fulfillment & delivery proofs
   'PROOF_OF_FULFILLMENT',
   'PROOF_OF_DELIVERY_SIGNATURE',
   'PROOF_OF_RECEIPT_COPY',
-  'RETURN_POLICY',
   'PROOF_OF_RETURN',
   'PROOF_OF_REFUND',
-  'PROOF_OF_RESIPMENT_OR_REPLACEMENT',
-  'CUSTOMS_DOCUMENT',
+  'PROOF_OF_RESHIPMENT',
+  'PROOF_OF_RESIPMENT_OR_REPLACEMENT', // Official PayPal API legacy alias
   'ONLINE_TRACKING_INFORMATION',
-  'ADDITIONAL_INFORMATION_OF_ITEM',
   'CREATE_SHIPPING_LABEL',
-  'POLICE_REPORT',
-  'DAMAGE_OR_REPLACEMENT_ESTIMATE',
-  'BUYER_CONFIRMATION',
+  'CUSTOMS_DOCUMENT',
+  'RECEIPT_OF_MERCHANDISE',
+
+  // Policies, contracts & agreements
+  'RETURN_POLICY',
   'COPY_OF_CONTRACT',
+  'BILLING_AGREEMENT',
   'TERMINATION_AGREEMENT',
+
+  // Item condition, descriptions & damage evaluations
+  'ADDITIONAL_INFORMATION_OF_ITEM',
+  'PROOF_OF_DAMAGE',
+  'DAMAGE_OR_REPLACEMENT_ESTIMATE',
+  'PROOF_OF_MISSING_ITEMS',
+  'PROOF_OF_EMPTY_PACKAGE_OR_DIFFERENT_ITEM',
+  'PROOF_OF_ITEM_NOT_RECEIVED',
+  'THIRDPARTY_PROOF_FOR_DAMAGE_OR_SIGNIFICANT_DIFFERENCE',
+
+  // Official declarations, affidavits & reports
+  'DECLARATION',
+  'POLICE_REPORT',
+  'BUYER_CONFIRMATION',
+  'APPEAL_AFFIDAVIT',
   'VALID_SUPPORTING_DOCUMENT',
+
+  // General catch-all supported by PayPal Disputes API
   'OTHER'
 ]);
 
@@ -61,22 +80,22 @@ const EVIDENCE_TYPES_ACCEPTING_REFUND_IDS = new Set([
 /**
  * Evaluates whether an evidence request matches the PROVIDE_EVIDENCE action workflow.
  * 
- * Rules:
- * 1. If entry-level action_info.action or action is specified:
- *    - Must equal 'PROVIDE_EVIDENCE'.
- *    - Exclude other actions (e.g. 'APPEAL', 'ACKNOWLEDGE_RETURN_ITEM').
- * 2. If entry-level action is missing, inspect dispute-level action_info.action:
- *    - Must equal 'PROVIDE_EVIDENCE'.
- *    - Exclude other actions (e.g. 'APPEAL', 'ACKNOWLEDGE_RETURN_ITEM').
- * 3. Conservative fallback for missing action metadata:
- *    - If dispute status is 'WAITING_FOR_SELLER_RESPONSE' and no conflicting action is specified,
- *      allow conservatively as standard pending seller evidence response.
- *    - Otherwise, reject.
+ * Strict Phase 4.3 Rules:
+ * 1. Confirm action_info.action is read from the individual evidence object.
+ *    - If entry-level action_info.action or action is specified:
+ *      * Must equal 'PROVIDE_EVIDENCE'.
+ *      * Exclude other actions (e.g. 'APPEAL', 'ACKNOWLEDGE_RETURN_ITEM').
+ * 2. If action metadata is missing on the individual evidence object:
+ *    - Require an eligible live dispute status ('WAITING_FOR_SELLER_RESPONSE')
+ *      AND the actual 'provide-evidence' HATEOAS link in the dispute's links array.
+ *    - Do NOT rely on undocumented dispute-level action metadata.
+ * 3. Mandatory source condition:
+ *    - Caller must verify ev.source === 'REQUESTED_FROM_SELLER'.
  */
 function isEvidenceRequestActionValid(ev, liveDispute = null, dispute = null) {
   if (!ev) return { valid: false, reason: 'ENTRY_NULL' };
 
-  // 1. Entry-level action
+  // 1. Confirm action_info.action is read from the individual evidence object
   const entryAction = ev.action_info?.action || ev.action;
   if (entryAction) {
     const isProvideEvidence = entryAction === 'PROVIDE_EVIDENCE';
@@ -88,28 +107,21 @@ function isEvidenceRequestActionValid(ev, liveDispute = null, dispute = null) {
     };
   }
 
-  // 2. Dispute-level action
-  const disputeAction = liveDispute?.action_info?.action || 
-                        dispute?.action_info?.action || 
-                        liveDispute?.rawPayload?.action_info?.action || 
-                        dispute?.rawPayload?.action_info?.action;
-  if (disputeAction) {
-    const isProvideEvidence = disputeAction === 'PROVIDE_EVIDENCE';
-    return {
-      valid: isProvideEvidence,
-      action: disputeAction,
-      provenance: 'DISPUTE_ACTION_INFO',
-      reason: isProvideEvidence ? null : `ACTION_MISMATCH_${disputeAction}`
-    };
-  }
-
-  // 3. Conservative fallback: Missing action metadata
+  // 2. If action metadata is missing on the individual evidence object:
+  // Require an eligible live dispute status ('WAITING_FOR_SELLER_RESPONSE')
+  // AND the actual 'provide-evidence' HATEOAS link in the dispute's links array.
+  // Do NOT rely on undocumented dispute-level action metadata.
   const disputeStatus = (liveDispute?.status || dispute?.status || '').toUpperCase();
-  if (disputeStatus === 'WAITING_FOR_SELLER_RESPONSE') {
+  const isEligibleStatus = disputeStatus === 'WAITING_FOR_SELLER_RESPONSE';
+
+  const links = liveDispute?.links || liveDispute?.rawPayload?.links || dispute?.links || dispute?.rawPayload?.links || [];
+  const hasProvideEvidenceLink = Array.isArray(links) && links.some((l) => l && l.rel === 'provide-evidence');
+
+  if (isEligibleStatus && hasProvideEvidenceLink) {
     return {
       valid: true,
-      action: 'PROVIDE_EVIDENCE_INFERRED_FROM_STAGE',
-      provenance: 'CONSERVATIVE_WAITING_FOR_SELLER_RESPONSE',
+      action: 'PROVIDE_EVIDENCE_INFERRED_FROM_STAGE_AND_HATEOAS',
+      provenance: 'CONSERVATIVE_WAITING_FOR_SELLER_RESPONSE_WITH_HATEOAS',
       reason: null
     };
   }
@@ -117,8 +129,10 @@ function isEvidenceRequestActionValid(ev, liveDispute = null, dispute = null) {
   return {
     valid: false,
     action: null,
-    provenance: 'MISSING_ACTION_INVALID_STAGE',
-    reason: `Dispute stage "${disputeStatus}" requires explicit PROVIDE_EVIDENCE action`
+    provenance: 'MISSING_ACTION_INELIGIBLE_DISPUTE',
+    reason: !isEligibleStatus
+      ? `Dispute status "${disputeStatus}" is not eligible for evidence submission (requires WAITING_FOR_SELLER_RESPONSE).`
+      : 'Dispute lacks documented "provide-evidence" HATEOAS link.'
   };
 }
 

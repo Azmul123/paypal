@@ -1150,7 +1150,14 @@ Carrier: FedEx Tracking: 781294819201 Delivered`;
       dispute_id: 'PP-D-94821',
       status: 'WAITING_FOR_SELLER_RESPONSE',
       reason: 'MERCHANDISE_OR_SERVICE_NOT_RECEIVED',
-      evidences: [{ evidence_type: 'PROOF_OF_FULFILLMENT', source: 'REQUESTED_FROM_SELLER', date: '2026-11-02T09:14:22Z' }]
+      evidences: [{ evidence_type: 'PROOF_OF_FULFILLMENT', source: 'REQUESTED_FROM_SELLER', date: '2026-11-02T09:14:22Z' }],
+      links: [
+        {
+          href: 'https://api-m.sandbox.paypal.com/v1/customer/disputes/PP-D-94821/provide-evidence',
+          rel: 'provide-evidence',
+          method: 'POST'
+        }
+      ]
     };
     const mapped = paypalService.mapEvidenceToPayPalSchema({
       dispute: { reason: 'MERCHANDISE_OR_SERVICE_NOT_RECEIVED' },
@@ -1169,7 +1176,14 @@ Carrier: FedEx Tracking: 781294819201 Delivered`;
       dispute_id: 'PP-D-94821',
       status: 'WAITING_FOR_SELLER_RESPONSE',
       reason: 'MERCHANDISE_OR_SERVICE_NOT_RECEIVED',
-      evidences: [{ evidence_type: 'PROOF_OF_RECEIPT_COPY', source: 'REQUESTED_FROM_SELLER' }]
+      evidences: [{ evidence_type: 'PROOF_OF_RECEIPT_COPY', source: 'REQUESTED_FROM_SELLER' }],
+      links: [
+        {
+          href: 'https://api-m.sandbox.paypal.com/v1/customer/disputes/PP-D-94821/provide-evidence',
+          rel: 'provide-evidence',
+          method: 'POST'
+        }
+      ]
     };
     const dynamicMapped = paypalService.mapEvidenceToPayPalSchema({
       dispute: { reason: 'MERCHANDISE_OR_SERVICE_NOT_RECEIVED' },
@@ -1524,18 +1538,29 @@ Carrier: FedEx Tracking: 781294819201 Delivered`;
     }
     assert(err18_5 !== null && err18_5.code === 'NO_SELLER_EVIDENCE_REQUESTED', '18.5 Missing action metadata rejected when dispute stage is not WAITING_FOR_SELLER_RESPONSE');
 
-    // 18.6: Dispute-level action APPEAL excludes request even when entry action is omitted
+    // 18.6: Missing action metadata requires provide-evidence HATEOAS link
     const s18Dispute6 = makePayPalDisputeFixture([
       { evidence_type: 'PROOF_OF_FULFILLMENT', source: 'REQUESTED_FROM_SELLER' }
     ]);
-    s18Dispute6.action_info = { action: 'APPEAL' };
+    s18Dispute6.links = [{ rel: 'self', href: 'https://api-m.sandbox.paypal.com/v1/customer/disputes/PP-D-84920' }]; // no provide-evidence link
     let err18_6 = null;
     try {
       paypalService.mapEvidenceToPayPalSchema({ liveDispute: s18Dispute6, documents: [] });
     } catch (e) {
       err18_6 = e;
     }
-    assert(err18_6 !== null && err18_6.code === 'NO_SELLER_EVIDENCE_REQUESTED', '18.6 Dispute-level action APPEAL excludes requests lacking explicit PROVIDE_EVIDENCE');
+    assert(err18_6 !== null && err18_6.code === 'NO_SELLER_EVIDENCE_REQUESTED', '18.6 Rejects missing action metadata when provide-evidence HATEOAS link is absent');
+
+    // 18.6b: Undocumented dispute-level action metadata is ignored; individual evidence object PROVIDE_EVIDENCE governs
+    const s18Dispute6b = makePayPalDisputeFixture([
+      { evidence_type: 'PROOF_OF_FULFILLMENT', source: 'REQUESTED_FROM_SELLER', action_info: { action: 'PROVIDE_EVIDENCE' } }
+    ]);
+    s18Dispute6b.action_info = { action: 'APPEAL' }; // Undocumented dispute-level action ignored
+    const s18Mapped6b = paypalService.mapEvidenceToPayPalSchema({
+      liveDispute: s18Dispute6b,
+      documents: [{ trackingNumber: '9400100000000000000000', carrierName: 'USPS' }]
+    });
+    assert(s18Mapped6b.evidences.length === 1, '18.6b Undocumented dispute-level action ignored; evidence object PROVIDE_EVIDENCE governs');
 
     // 18.7: Multi-item isolation: Requests with item_id attach only matching tracking records
     const s18Dispute7 = makePayPalDisputeFixture([
@@ -1662,6 +1687,52 @@ Carrier: FedEx Tracking: 781294819201 Delivered`;
     const s18PreflightAppeal = paypalService.validateLivePayPalDisputePreFlight(s18Dispute2);
     assert(s18PreflightAppeal.valid === false, '18.18 Live preflight rejects dispute when seller requests match APPEAL instead of PROVIDE_EVIDENCE');
     assert(s18PreflightAppeal.errors.some((e) => e.code === 'NO_SELLER_EVIDENCE_REQUESTED'), '18.18 Preflight cites NO_SELLER_EVIDENCE_REQUESTED');
+
+    // 18.19: Complete enum verification: PROOF_OF_RESHIPMENT is accepted
+    const s18DisputeReship = makePayPalDisputeFixture([
+      { evidence_type: 'PROOF_OF_RESHIPMENT', source: 'REQUESTED_FROM_SELLER', action_info: { action: 'PROVIDE_EVIDENCE' } }
+    ]);
+    const s18MappedReship = paypalService.mapEvidenceToPayPalSchema({
+      liveDispute: s18DisputeReship,
+      documents: [{ documentType: 'SHIPPING_LABEL', fileName: 'replacement_label.pdf' }]
+    });
+    assert(s18MappedReship.evidences[0].evidence_type === 'PROOF_OF_RESHIPMENT', '18.19 PROOF_OF_RESHIPMENT accepted as official PayPal evidence type');
+
+    // 18.20: Complete enum verification: DECLARATION and PROOF_OF_DAMAGE accepted
+    const s18DisputeSNAD = makePayPalDisputeFixture([
+      { evidence_type: 'DECLARATION', source: 'REQUESTED_FROM_SELLER', action_info: { action: 'PROVIDE_EVIDENCE' } },
+      { evidence_type: 'PROOF_OF_DAMAGE', source: 'REQUESTED_FROM_SELLER', action_info: { action: 'PROVIDE_EVIDENCE' } }
+    ]);
+    const s18MappedSNAD = paypalService.mapEvidenceToPayPalSchema({
+      liveDispute: s18DisputeSNAD,
+      documents: [{ documentType: 'CUSTOMER_COMMUNICATION', fileName: 'signed_declaration.pdf' }]
+    });
+    assert(s18MappedSNAD.evidences[0].evidence_type === 'DECLARATION', '18.20 DECLARATION accepted as official PayPal evidence type');
+    assert(s18MappedSNAD.evidences[1].evidence_type === 'PROOF_OF_DAMAGE', '18.20 PROOF_OF_DAMAGE accepted as official PayPal evidence type');
+
+    // 18.21: Complete enum verification: PROOF_OF_EMPTY_PACKAGE_OR_DIFFERENT_ITEM and PROOF_OF_MISSING_ITEMS accepted
+    const s18DisputeShort = makePayPalDisputeFixture([
+      { evidence_type: 'PROOF_OF_EMPTY_PACKAGE_OR_DIFFERENT_ITEM', source: 'REQUESTED_FROM_SELLER', action_info: { action: 'PROVIDE_EVIDENCE' } },
+      { evidence_type: 'PROOF_OF_MISSING_ITEMS', source: 'REQUESTED_FROM_SELLER', action_info: { action: 'PROVIDE_EVIDENCE' } }
+    ]);
+    const s18MappedShort = paypalService.mapEvidenceToPayPalSchema({
+      liveDispute: s18DisputeShort,
+      documents: []
+    });
+    assert(s18MappedShort.evidences[0].evidence_type === 'PROOF_OF_EMPTY_PACKAGE_OR_DIFFERENT_ITEM', '18.21 PROOF_OF_EMPTY_PACKAGE_OR_DIFFERENT_ITEM accepted');
+    assert(s18MappedShort.evidences[1].evidence_type === 'PROOF_OF_MISSING_ITEMS', '18.21 PROOF_OF_MISSING_ITEMS accepted');
+
+    // 18.22: Complete enum verification: Genuinely unsupported / fabricated types safely blocked
+    const s18DisputeFabricated = makePayPalDisputeFixture([
+      { evidence_type: 'UNSUPPORTED_FABRICATED_DOC_XYZ', source: 'REQUESTED_FROM_SELLER', action_info: { action: 'PROVIDE_EVIDENCE' } }
+    ]);
+    let err18_22 = null;
+    try {
+      paypalService.mapEvidenceToPayPalSchema({ liveDispute: s18DisputeFabricated, documents: [] });
+    } catch (e) {
+      err18_22 = e;
+    }
+    assert(err18_22 !== null && err18_22.code === 'UNKNOWN_EVIDENCE_TYPE', '18.22 Genuinely unsupported evidence types safely blocked with UNKNOWN_EVIDENCE_TYPE');
 
     console.log('\n====================================================');
     console.log(`Summary: ${passed} Passed, ${failed} Failed`);
