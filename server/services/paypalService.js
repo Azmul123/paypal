@@ -24,6 +24,7 @@ const KNOWN_PAYPAL_EVIDENCE_TYPES = new Set([
   'PROOF_OF_DELIVERY_SIGNATURE',
   'PROOF_OF_RECEIPT_COPY',
   'RETURN_POLICY',
+  'PROOF_OF_RETURN',
   'PROOF_OF_REFUND',
   'PROOF_OF_RESIPMENT_OR_REPLACEMENT',
   'CUSTOMS_DOCUMENT',
@@ -38,6 +39,151 @@ const KNOWN_PAYPAL_EVIDENCE_TYPES = new Set([
   'VALID_SUPPORTING_DOCUMENT',
   'OTHER'
 ]);
+
+/**
+ * Official PayPal Customer Disputes API v1 evidence types that accept tracking_info in evidence_info
+ * In PayPal official schema, evidence_info.tracking_info is strictly supported ONLY for:
+ * - PROOF_OF_FULFILLMENT
+ * - PROOF_OF_RETURN
+ * PROOF_OF_REFUND accepts evidence_info.refund_ids.
+ * Other evidence types (including PROOF_OF_DELIVERY_SIGNATURE, ONLINE_TRACKING_INFORMATION,
+ * RETURN_POLICY, etc.) do NOT accept tracking_info in evidence_info.
+ */
+const EVIDENCE_TYPES_ACCEPTING_TRACKING = new Set([
+  'PROOF_OF_FULFILLMENT',
+  'PROOF_OF_RETURN'
+]);
+
+const EVIDENCE_TYPES_ACCEPTING_REFUND_IDS = new Set([
+  'PROOF_OF_REFUND'
+]);
+
+/**
+ * Evaluates whether an evidence request matches the PROVIDE_EVIDENCE action workflow.
+ * 
+ * Rules:
+ * 1. If entry-level action_info.action or action is specified:
+ *    - Must equal 'PROVIDE_EVIDENCE'.
+ *    - Exclude other actions (e.g. 'APPEAL', 'ACKNOWLEDGE_RETURN_ITEM').
+ * 2. If entry-level action is missing, inspect dispute-level action_info.action:
+ *    - Must equal 'PROVIDE_EVIDENCE'.
+ *    - Exclude other actions (e.g. 'APPEAL', 'ACKNOWLEDGE_RETURN_ITEM').
+ * 3. Conservative fallback for missing action metadata:
+ *    - If dispute status is 'WAITING_FOR_SELLER_RESPONSE' and no conflicting action is specified,
+ *      allow conservatively as standard pending seller evidence response.
+ *    - Otherwise, reject.
+ */
+function isEvidenceRequestActionValid(ev, liveDispute = null, dispute = null) {
+  if (!ev) return { valid: false, reason: 'ENTRY_NULL' };
+
+  // 1. Entry-level action
+  const entryAction = ev.action_info?.action || ev.action;
+  if (entryAction) {
+    const isProvideEvidence = entryAction === 'PROVIDE_EVIDENCE';
+    return {
+      valid: isProvideEvidence,
+      action: entryAction,
+      provenance: 'ENTRY_ACTION_INFO',
+      reason: isProvideEvidence ? null : `ACTION_MISMATCH_${entryAction}`
+    };
+  }
+
+  // 2. Dispute-level action
+  const disputeAction = liveDispute?.action_info?.action || 
+                        dispute?.action_info?.action || 
+                        liveDispute?.rawPayload?.action_info?.action || 
+                        dispute?.rawPayload?.action_info?.action;
+  if (disputeAction) {
+    const isProvideEvidence = disputeAction === 'PROVIDE_EVIDENCE';
+    return {
+      valid: isProvideEvidence,
+      action: disputeAction,
+      provenance: 'DISPUTE_ACTION_INFO',
+      reason: isProvideEvidence ? null : `ACTION_MISMATCH_${disputeAction}`
+    };
+  }
+
+  // 3. Conservative fallback: Missing action metadata
+  const disputeStatus = (liveDispute?.status || dispute?.status || '').toUpperCase();
+  if (disputeStatus === 'WAITING_FOR_SELLER_RESPONSE') {
+    return {
+      valid: true,
+      action: 'PROVIDE_EVIDENCE_INFERRED_FROM_STAGE',
+      provenance: 'CONSERVATIVE_WAITING_FOR_SELLER_RESPONSE',
+      reason: null
+    };
+  }
+
+  return {
+    valid: false,
+    action: null,
+    provenance: 'MISSING_ACTION_INVALID_STAGE',
+    reason: `Dispute stage "${disputeStatus}" requires explicit PROVIDE_EVIDENCE action`
+  };
+}
+
+/**
+ * Extracts item ID from a document or evidence item.
+ */
+function getDocumentItemId(doc) {
+  if (!doc) return null;
+  return (
+    doc.itemId ||
+    doc.disputeItemId ||
+    doc.item_id ||
+    doc.metadata?.itemId ||
+    doc.metadata?.item_id ||
+    doc.metadata?.disputeItemId ||
+    null
+  );
+}
+
+/**
+ * Maps carrier string to PayPal carrier schema.
+ * PayPal enum carriers: FEDEX, UPS, USPS, DHL.
+ * If unknown carrier is provided, use OTHER and supply actual name in carrier_name_other.
+ * If carrier is missing, empty, or literally 'OTHER' with no name, do NOT create tracking_info.
+ */
+function mapCarrierName(rawCarrier) {
+  if (!rawCarrier || typeof rawCarrier !== 'string' || rawCarrier.trim().length === 0) {
+    return { isCarrierProvided: false, carrierName: null, carrierNameOther: null };
+  }
+  const trimmed = rawCarrier.trim();
+  const upper = trimmed.toUpperCase();
+
+  const validEnums = ['FEDEX', 'UPS', 'USPS', 'DHL'];
+  for (const c of validEnums) {
+    if (upper.includes(c)) {
+      return { isCarrierProvided: true, carrierName: c, carrierNameOther: null };
+    }
+  }
+
+  // If upper is literally 'OTHER' and no other name was provided:
+  if (upper === 'OTHER') {
+    return { isCarrierProvided: false, carrierName: null, carrierNameOther: null };
+  }
+
+  // Unknown carrier: map to OTHER and provide raw string in carrierNameOther
+  return { isCarrierProvided: true, carrierName: 'OTHER', carrierNameOther: trimmed };
+}
+
+/**
+ * Collects refund IDs from dispute, responsePackage, or documents for PROOF_OF_REFUND.
+ */
+function getRefundIds(dispute, responsePackage, documents = []) {
+  const ids = new Set();
+  if (dispute?.refund_ids && Array.isArray(dispute.refund_ids)) {
+    dispute.refund_ids.forEach((id) => id && ids.add(String(id).trim()));
+  }
+  if (responsePackage?.refundIds && Array.isArray(responsePackage.refundIds)) {
+    responsePackage.refundIds.forEach((id) => id && ids.add(String(id).trim()));
+  }
+  documents.forEach((doc) => {
+    if (doc.refundId) ids.add(String(doc.refundId).trim());
+    if (doc.refund_id) ids.add(String(doc.refund_id).trim());
+  });
+  return Array.from(ids).filter(Boolean);
+}
 
 class PayPalService {
   constructor() {
@@ -418,12 +564,18 @@ class PayPalService {
     }
 
     // 3. Check for evidence entries requested from seller (REQUESTED_FROM_SELLER)
+    // AND matching action "PROVIDE_EVIDENCE" (or conservative fallback in WAITING_FOR_SELLER_RESPONSE)
     const rawEvidences = paypalDispute.rawPayload?.evidences || paypalDispute.evidences || [];
-    const sellerRequests = rawEvidences.filter((e) => e && e.source === 'REQUESTED_FROM_SELLER');
+    const sellerRequests = rawEvidences.filter((e) => {
+      if (!e || e.source !== 'REQUESTED_FROM_SELLER') return false;
+      const actionResult = isEvidenceRequestActionValid(e, paypalDispute, null);
+      return actionResult.valid;
+    });
+
     if (sellerRequests.length === 0) {
       errors.push({
         code: 'NO_SELLER_EVIDENCE_REQUESTED',
-        message: 'PayPal dispute does not have any pending evidence requests for the seller (source: REQUESTED_FROM_SELLER).'
+        message: 'PayPal dispute does not have any pending evidence requests for the seller matching action "PROVIDE_EVIDENCE" (source: REQUESTED_FROM_SELLER).'
       });
     }
 
@@ -446,14 +598,26 @@ class PayPalService {
   /**
    * Maps evidence documents and narrative to PayPal's official API schema.
    * 
-   * STRICT PHASE 4.1 RULES:
+   * STRICT PHASE 4.2 RULES:
    * 1. Strictly selects evidence entries whose source is exactly 'REQUESTED_FROM_SELLER'.
-   * 2. Never interprets REQUESTED_FROM_BUYER, SUBMITTED_BY_BUYER, SUBMITTED_BY_SELLER, or SUBMITTED_BY_PARTNER as requests for seller evidence.
-   * 3. Never invents an evidence type based on dispute.reason.
-   * 4. Never silently substitutes another evidence type when no seller-requested type exists.
-   * 5. Keeps FlowPilot's internal Evidence Verification Matrix separate from PayPal's official evidence requirements.
-   * 6. If no applicable seller-requested evidence type exists, blocks submission with an actionable error.
-   * 7. Enforces tracking structure validation while explicitly rejecting false external verification claims.
+   * 2. Matches evidence requests to the correct PayPal action (PROVIDE_EVIDENCE).
+   *    - Excludes requests associated with other actions (e.g. APPEAL, ACKNOWLEDGE_RETURN_ITEM).
+   *    - Handles missing action metadata conservatively (allowed in WAITING_FOR_SELLER_RESPONSE).
+   * 3. Prevents invalid OTHER carrier payloads:
+   *    - Known carrier -> mapped to PayPal carrier enum (FEDEX, UPS, USPS, DHL).
+   *    - Unknown carrier -> carrier_name: 'OTHER' with actual name in carrier_name_other.
+   *    - Missing carrier -> do NOT create tracking_info entry. Never submit OTHER with missing/empty carrier_name_other.
+   *    - Preserves tracking number as unverified merchant-provided entry in metadata.
+   * 4. Prevents unrelated tracking information from being attached:
+   *    - Associates tracking records with correct PayPal items using reliable item_id.
+   *    - If association cannot be established, does not automatically attach the tracking record.
+   *    - Records exclusion reasons (UNASSOCIATED_ITEM_ID, MISMATCHED_ITEM_ID) in tracking metadata.
+   * 5. Enforces evidence_info schema restrictions:
+   *    - evidence_info.tracking_info is strictly supported ONLY for PROOF_OF_FULFILLMENT and PROOF_OF_RETURN.
+   *    - evidence_info.refund_ids is supported for PROOF_OF_REFUND.
+   *    - Never attaches tracking_info to PROOF_OF_DELIVERY_SIGNATURE, ONLINE_TRACKING_INFORMATION, etc.
+   * 6. Preserves separation between internal Verification Matrix and official PayPal requirements.
+   * 7. Rejects false external verification claims: marks merchant entries as unverified by carrier API.
    */
   mapEvidenceToPayPalSchema({ dispute, responsePackage, documents = [], liveDispute = null }) {
     const narrative = responsePackage?.narrative || '';
@@ -465,18 +629,22 @@ class PayPalService {
                           dispute?.evidences || [];
 
     // 2. Filter strictly for evidence entries whose source is EXACTLY 'REQUESTED_FROM_SELLER'
-    // Exclude REQUESTED_FROM_BUYER, SUBMITTED_BY_BUYER, SUBMITTED_BY_SELLER, SUBMITTED_BY_PARTNER
+    // AND whose action is explicitly 'PROVIDE_EVIDENCE' (or conservative fallback in WAITING_FOR_SELLER_RESPONSE)
+    // Exclude REQUESTED_FROM_BUYER, SUBMITTED_BY_BUYER, SUBMITTED_BY_SELLER, SUBMITTED_BY_PARTNER,
+    // and exclude non-PROVIDE_EVIDENCE actions (e.g. APPEAL, ACKNOWLEDGE_RETURN_ITEM)
     const sellerRequestedEntries = liveEvidences.filter((ev) => {
-      return ev && ev.source === 'REQUESTED_FROM_SELLER';
+      if (!ev || ev.source !== 'REQUESTED_FROM_SELLER') return false;
+      const actionResult = isEvidenceRequestActionValid(ev, liveDispute, dispute);
+      return actionResult.valid;
     });
 
-    // 3. Block submission immediately if no seller-requested evidence exists
+    // 3. Block submission immediately if no matching seller-requested evidence exists
     // Do NOT invent an evidence type based on dispute.reason
     // Do NOT silently substitute another evidence type
     // FlowPilot's internal Evidence Verification Matrix does NOT override PayPal's requirements
     if (sellerRequestedEntries.length === 0) {
       const error = new Error(
-        'No evidence is currently requested from seller (source: REQUESTED_FROM_SELLER) on this PayPal dispute. Submission blocked.'
+        'No evidence is currently requested from seller (source: REQUESTED_FROM_SELLER) matching action "PROVIDE_EVIDENCE" on this PayPal dispute. Submission blocked.'
       );
       error.code = 'NO_SELLER_EVIDENCE_REQUESTED';
       error.statusCode = 422;
@@ -496,22 +664,32 @@ class PayPalService {
     }
 
     // 5. Tracking Information Processing & Safeguards
-    // Keep separate: field is present, valid structure, externally verified
-    // A tracking number passing a length or structure check is NEVER claimed as externally verified
-    const trackingInfoList = [];
+    // Rules:
+    // - If known carrier: map to PayPal carrier enum (FEDEX, UPS, USPS, DHL)
+    // - If unknown carrier: use OTHER and provide actual name in carrier_name_other
+    // - If carrier name is missing: do NOT create a tracking_info entry! Never submit OTHER without carrier_name_other.
+    // - Preserve tracking number as unverified merchant-provided information in metadata
+    // - Associate tracking records with correct PayPal items using reliable item_id
+    // - If association cannot be established, do not automatically attach the tracking record
+    // - Record exclusion reasons in tracking metadata
+    // - Do not claim carrier verification
+    const trackingInfoItems = [];
     const trackingMetadataList = [];
-    const validCarriers = ['FEDEX', 'UPS', 'USPS', 'DHL'];
 
     documents.forEach((doc) => {
       const rawTracking = doc.trackingNumber ? String(doc.trackingNumber).trim() : '';
       const fieldPresent = Boolean(rawTracking);
+      const docItemId = getDocumentItemId(doc);
 
       if (!fieldPresent) {
         trackingMetadataList.push({
           documentId: doc.id,
+          itemId: docItemId,
+          trackingNumber: null,
           fieldPresent: false,
           validStructure: false,
           hasCarrierSpecified: false,
+          exclusionReason: 'MISSING_TRACKING_NUMBER',
           externallyVerified: false,
           verificationStatus: 'NOT_APPLICABLE',
           verificationNote: 'Tracking number not present on document.'
@@ -519,44 +697,54 @@ class PayPalService {
         return;
       }
 
-      // Tracking number is present - validate structure against PayPal schema
-      const rawCarrier = (doc.carrierName || '').toUpperCase().trim();
-      let matchedCarrier = 'OTHER';
-      let otherCarrier = undefined;
+      // Tracking number is present - validate carrier
+      const carrierMapping = mapCarrierName(doc.carrierName);
 
-      if (rawCarrier) {
-        for (const c of validCarriers) {
-          if (rawCarrier.includes(c)) {
-            matchedCarrier = c;
-            break;
-          }
-        }
-        if (matchedCarrier === 'OTHER') {
-          otherCarrier = doc.carrierName.trim();
-        }
-      } else {
-        // Tracking number present but associated carrier information missing
-        matchedCarrier = 'OTHER';
-        otherCarrier = undefined;
+      if (!carrierMapping.isCarrierProvided) {
+        // Missing carrier name or empty 'OTHER' — do NOT create tracking_info entry
+        trackingMetadataList.push({
+          documentId: doc.id,
+          itemId: docItemId,
+          trackingNumber: rawTracking,
+          fieldPresent: true,
+          validStructure: false,
+          hasCarrierSpecified: false,
+          carrierName: null,
+          carrierNameOther: null,
+          exclusionReason: 'MISSING_CARRIER_NAME',
+          externallyVerified: false,
+          verificationStatus: 'UNVERIFIED_MERCHANT_ENTRY',
+          verificationNote: 'Tracking number present but carrier name is missing. PayPal requires carrier_name_other when carrier is OTHER; tracking_info omitted to prevent invalid payload.'
+        });
+        return;
       }
 
-      const trackingItem = {
-        carrier_name: matchedCarrier,
+      // Carrier is valid (either standard enum or OTHER with non-empty carrier_name_other)
+      const trackingEntry = {
+        carrier_name: carrierMapping.carrierName,
         tracking_number: rawTracking
       };
-      if (otherCarrier) {
-        trackingItem.carrier_name_other = otherCarrier;
+      if (carrierMapping.carrierNameOther) {
+        trackingEntry.carrier_name_other = carrierMapping.carrierNameOther;
       }
 
-      trackingInfoList.push(trackingItem);
+      trackingInfoItems.push({
+        ...trackingEntry,
+        _docId: doc.id,
+        _itemId: docItemId,
+        _applicableItemIds: Array.isArray(doc.applicableItemIds) ? doc.applicableItemIds : null
+      });
 
       trackingMetadataList.push({
         documentId: doc.id,
+        itemId: docItemId,
+        trackingNumber: rawTracking,
         fieldPresent: true,
         validStructure: true,
-        carrierName: matchedCarrier,
-        carrierNameOther: otherCarrier || null,
-        hasCarrierSpecified: Boolean(rawCarrier),
+        hasCarrierSpecified: true,
+        carrierName: carrierMapping.carrierName,
+        carrierNameOther: carrierMapping.carrierNameOther,
+        exclusionReason: null,
         externallyVerified: false, // Strict: Do NOT claim external verification unless a real carrier verification integration exists
         verificationStatus: 'UNVERIFIED_MERCHANT_ENTRY',
         verificationNote: 'Structure validated against PayPal schema; not externally verified with carrier tracking API.'
@@ -564,6 +752,11 @@ class PayPalService {
     });
 
     // 6. Map each seller-requested evidence type to an entry in the PayPal evidences array
+    // Rules:
+    // - evidence_info.tracking_info is strictly supported ONLY for PROOF_OF_FULFILLMENT and PROOF_OF_RETURN
+    // - evidence_info.refund_ids is supported for PROOF_OF_REFUND
+    // - Other evidence types (including PROOF_OF_DELIVERY_SIGNATURE and ONLINE_TRACKING_INFORMATION) do NOT accept tracking_info
+    // - Associate tracking records with correct item_id; if item-specific, only matching tracking items attach
     const evidenceEntries = sellerRequestedEntries.map((req) => {
       const entry = {
         evidence_type: req.evidence_type,
@@ -574,15 +767,50 @@ class PayPalService {
         entry.item_id = req.item_id;
       }
 
-      // Attach tracking_info ONLY if the requested evidence type accepts shipping tracking
-      const acceptsTracking = ['PROOF_OF_FULFILLMENT', 'PROOF_OF_DELIVERY_SIGNATURE', 'ONLINE_TRACKING_INFORMATION'].includes(req.evidence_type);
-      if (acceptsTracking && trackingInfoList.length > 0) {
-        entry.evidence_info = {
-          tracking_info: trackingInfoList
-        };
+      // 6a. Check if this evidence type accepts tracking_info
+      if (EVIDENCE_TYPES_ACCEPTING_TRACKING.has(req.evidence_type)) {
+        const matchingTracking = trackingInfoItems.filter((trk) => {
+          if (req.item_id) {
+            // Request is for a specific item: only attach tracking associated with that item_id
+            if (trk._itemId && trk._itemId === req.item_id) return true;
+            if (trk._applicableItemIds && trk._applicableItemIds.includes(req.item_id)) return true;
+            return false;
+          } else {
+            // Dispute-level request: attach tracking records that are not tied to a different specific item
+            return !trk._itemId;
+          }
+        });
+
+        if (matchingTracking.length > 0) {
+          entry.evidence_info = {
+            tracking_info: matchingTracking.map(({ _docId, _itemId, _applicableItemIds, ...cleanTrk }) => cleanTrk)
+          };
+        }
+      } else if (EVIDENCE_TYPES_ACCEPTING_REFUND_IDS.has(req.evidence_type)) {
+        const refundIds = getRefundIds(dispute, responsePackage, documents);
+        if (refundIds.length > 0) {
+          entry.evidence_info = {
+            refund_ids: refundIds
+          };
+        }
       }
 
       return entry;
+    });
+
+    // 7. Post-process tracking metadata to flag item-association exclusions
+    trackingMetadataList.forEach((meta) => {
+      if (meta.validStructure && !meta.exclusionReason) {
+        const isAttached = evidenceEntries.some((e) => 
+          e.evidence_info?.tracking_info?.some((t) => t.tracking_number === meta.trackingNumber)
+        );
+        if (!isAttached) {
+          meta.exclusionReason = meta.itemId ? 'MISMATCHED_ITEM_ID' : 'UNASSOCIATED_ITEM_ID';
+          meta.verificationNote = `Tracking number valid, but omitted from submission because ${
+            meta.itemId ? `item_id "${meta.itemId}" did not match any requested evidence item.` : 'it lacks an item_id association for item-specific evidence requests.'
+          }`;
+        }
+      }
     });
 
     return {
@@ -909,4 +1137,9 @@ class PayPalService {
 
 const instance = new PayPalService();
 instance.KNOWN_PAYPAL_EVIDENCE_TYPES = KNOWN_PAYPAL_EVIDENCE_TYPES;
+instance.EVIDENCE_TYPES_ACCEPTING_TRACKING = EVIDENCE_TYPES_ACCEPTING_TRACKING;
+instance.EVIDENCE_TYPES_ACCEPTING_REFUND_IDS = EVIDENCE_TYPES_ACCEPTING_REFUND_IDS;
+instance.isEvidenceRequestActionValid = isEvidenceRequestActionValid;
+instance.mapCarrierName = mapCarrierName;
+instance.getDocumentItemId = getDocumentItemId;
 module.exports = instance;

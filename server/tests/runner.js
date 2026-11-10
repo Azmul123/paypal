@@ -1409,7 +1409,7 @@ Carrier: FedEx Tracking: 781294819201 Delivered`;
     assert(s17Mapped9._trackingMetadata[0].fieldPresent === false, '17.9 Metadata confirms tracking number fieldPresent is false');
     assert(s17Mapped9._trackingMetadata[0].validStructure === false, '17.9 Metadata confirms validStructure is false');
 
-    // 17.10: Tracking number present but associated carrier information missing
+    // 17.10: Tracking number present but associated carrier information missing -> do NOT create tracking_info entry
     const s17Dispute10 = makePayPalDisputeFixture([
       { evidence_type: 'PROOF_OF_FULFILLMENT', source: 'REQUESTED_FROM_SELLER' }
     ]);
@@ -1417,13 +1417,24 @@ Carrier: FedEx Tracking: 781294819201 Delivered`;
       liveDispute: s17Dispute10,
       documents: [{ trackingNumber: '9400111899562537624128' }] // no carrierName provided
     });
-    assert(s17Mapped10.evidences[0].evidence_info.tracking_info[0].tracking_number === '9400111899562537624128', '17.10 Preserves valid tracking number');
-    assert(s17Mapped10.evidences[0].evidence_info.tracking_info[0].carrier_name === 'OTHER', '17.10 Normalizes missing carrier to OTHER');
-    assert(s17Mapped10.evidences[0].evidence_info.tracking_info[0].carrier_name_other === undefined, '17.10 carrier_name_other is undefined when unprovided');
+    assert(!s17Mapped10.evidences[0].evidence_info?.tracking_info, '17.10 tracking_info omitted when carrier name is missing');
+    assert(s17Mapped10._trackingMetadata[0].trackingNumber === '9400111899562537624128', '17.10 Preserves valid tracking number in metadata');
     assert(s17Mapped10._trackingMetadata[0].fieldPresent === true, '17.10 Tracking metadata: fieldPresent is true');
-    assert(s17Mapped10._trackingMetadata[0].validStructure === true, '17.10 Tracking metadata: validStructure is true');
+    assert(s17Mapped10._trackingMetadata[0].validStructure === false, '17.10 Tracking metadata: validStructure is false when carrier missing');
     assert(s17Mapped10._trackingMetadata[0].hasCarrierSpecified === false, '17.10 Tracking metadata: hasCarrierSpecified is false');
+    assert(s17Mapped10._trackingMetadata[0].exclusionReason === 'MISSING_CARRIER_NAME', '17.10 Tracking metadata records MISSING_CARRIER_NAME exclusion reason');
     assert(s17Mapped10._trackingMetadata[0].externallyVerified === false, '17.10 Tracking metadata: externallyVerified is strictly false');
+
+    // 17.10b: Unknown carrier maps to OTHER with non-empty carrier_name_other
+    const s17Mapped10b = paypalService.mapEvidenceToPayPalSchema({
+      liveDispute: s17Dispute10,
+      documents: [{ trackingNumber: '9400111899562537624128', carrierName: 'OnTrac Logistics' }]
+    });
+    assert(s17Mapped10b.evidences[0].evidence_info.tracking_info[0].carrier_name === 'OTHER', '17.10b Unknown carrier normalized to OTHER');
+    assert(s17Mapped10b.evidences[0].evidence_info.tracking_info[0].carrier_name_other === 'OnTrac Logistics', '17.10b carrier_name_other populated with actual carrier name');
+    assert(s17Mapped10b.evidences[0].evidence_info.tracking_info[0].tracking_number === '9400111899562537624128', '17.10b Preserves tracking number');
+    assert(s17Mapped10b._trackingMetadata[0].validStructure === true, '17.10b validStructure is true when carrier_name_other present');
+    assert(s17Mapped10b._trackingMetadata[0].exclusionReason === null, '17.10b No exclusion reason when carrier_name_other present');
 
     // 17.11: No seller-requested evidence — submission blocked
     const s17Dispute11 = makePayPalDisputeFixture([
@@ -1449,6 +1460,208 @@ Carrier: FedEx Tracking: 781294819201 Delivered`;
     });
     assert(s17Mapped12.evidences[0].evidence_type === 'RETURN_POLICY', '17.12 Official PayPal requested type (RETURN_POLICY) is preserved');
     assert(s17Mapped12.evidences[0].evidence_type !== 'PROOF_OF_FULFILLMENT', '17.12 Internal matrix (PROOF_OF_FULFILLMENT) does not override PayPal requested type');
+
+    // =========================================================================
+    // [Suite 18: Phase 4.2 Final PayPal Payload Validation, Carrier Rules & Item Isolation]
+    // =========================================================================
+    console.log('\n[Suite 18: Phase 4.2 Final PayPal Payload Validation, Carrier Rules & Item Isolation]');
+
+    // 18.1: Action matching: Explicit PROVIDE_EVIDENCE action accepted
+    const s18Dispute1 = makePayPalDisputeFixture([
+      { evidence_type: 'PROOF_OF_FULFILLMENT', source: 'REQUESTED_FROM_SELLER', action_info: { action: 'PROVIDE_EVIDENCE' } }
+    ]);
+    const s18Mapped1 = paypalService.mapEvidenceToPayPalSchema({
+      liveDispute: s18Dispute1,
+      documents: [{ trackingNumber: '1Z9999999999999999', carrierName: 'UPS Ground' }]
+    });
+    assert(s18Mapped1.evidences.length === 1, '18.1 Request with explicit PROVIDE_EVIDENCE action accepted');
+    assert(s18Mapped1.evidences[0].evidence_type === 'PROOF_OF_FULFILLMENT', '18.1 Type matches requested');
+    assert(s18Mapped1.evidences[0].evidence_info.tracking_info[0].carrier_name === 'UPS', '18.1 Maps UPS carrier enum');
+
+    // 18.2: Action matching: APPEAL action is strictly excluded
+    const s18Dispute2 = makePayPalDisputeFixture([
+      { evidence_type: 'PROOF_OF_FULFILLMENT', source: 'REQUESTED_FROM_SELLER', action_info: { action: 'APPEAL' } }
+    ]);
+    let err18_2 = null;
+    try {
+      paypalService.mapEvidenceToPayPalSchema({ liveDispute: s18Dispute2, documents: [] });
+    } catch (e) {
+      err18_2 = e;
+    }
+    assert(err18_2 !== null && err18_2.code === 'NO_SELLER_EVIDENCE_REQUESTED', '18.2 Evidence request with action APPEAL is excluded from provide-evidence workflow');
+
+    // 18.3: Action matching: ACKNOWLEDGE_RETURN_ITEM action is strictly excluded
+    const s18Dispute3 = makePayPalDisputeFixture([
+      { evidence_type: 'PROOF_OF_FULFILLMENT', source: 'REQUESTED_FROM_SELLER', action_info: { action: 'ACKNOWLEDGE_RETURN_ITEM' } }
+    ]);
+    let err18_3 = null;
+    try {
+      paypalService.mapEvidenceToPayPalSchema({ liveDispute: s18Dispute3, documents: [] });
+    } catch (e) {
+      err18_3 = e;
+    }
+    assert(err18_3 !== null && err18_3.code === 'NO_SELLER_EVIDENCE_REQUESTED', '18.3 Evidence request with action ACKNOWLEDGE_RETURN_ITEM is excluded');
+
+    // 18.4: Action matching: Missing action metadata conservatively accepted in WAITING_FOR_SELLER_RESPONSE
+    const s18Dispute4 = makePayPalDisputeFixture([
+      { evidence_type: 'PROOF_OF_FULFILLMENT', source: 'REQUESTED_FROM_SELLER' } // no action_info
+    ], 'WAITING_FOR_SELLER_RESPONSE');
+    const s18Mapped4 = paypalService.mapEvidenceToPayPalSchema({
+      liveDispute: s18Dispute4,
+      documents: []
+    });
+    assert(s18Mapped4.evidences.length === 1, '18.4 Missing action metadata conservatively accepted in WAITING_FOR_SELLER_RESPONSE');
+
+    // 18.5: Action matching: Missing action metadata rejected if stage is not WAITING_FOR_SELLER_RESPONSE
+    const s18Dispute5 = makePayPalDisputeFixture([
+      { evidence_type: 'PROOF_OF_FULFILLMENT', source: 'REQUESTED_FROM_SELLER' } // no action_info
+    ], 'UNDER_REVIEW');
+    let err18_5 = null;
+    try {
+      paypalService.mapEvidenceToPayPalSchema({ liveDispute: s18Dispute5, documents: [] });
+    } catch (e) {
+      err18_5 = e;
+    }
+    assert(err18_5 !== null && err18_5.code === 'NO_SELLER_EVIDENCE_REQUESTED', '18.5 Missing action metadata rejected when dispute stage is not WAITING_FOR_SELLER_RESPONSE');
+
+    // 18.6: Dispute-level action APPEAL excludes request even when entry action is omitted
+    const s18Dispute6 = makePayPalDisputeFixture([
+      { evidence_type: 'PROOF_OF_FULFILLMENT', source: 'REQUESTED_FROM_SELLER' }
+    ]);
+    s18Dispute6.action_info = { action: 'APPEAL' };
+    let err18_6 = null;
+    try {
+      paypalService.mapEvidenceToPayPalSchema({ liveDispute: s18Dispute6, documents: [] });
+    } catch (e) {
+      err18_6 = e;
+    }
+    assert(err18_6 !== null && err18_6.code === 'NO_SELLER_EVIDENCE_REQUESTED', '18.6 Dispute-level action APPEAL excludes requests lacking explicit PROVIDE_EVIDENCE');
+
+    // 18.7: Multi-item isolation: Requests with item_id attach only matching tracking records
+    const s18Dispute7 = makePayPalDisputeFixture([
+      { evidence_type: 'PROOF_OF_FULFILLMENT', source: 'REQUESTED_FROM_SELLER', item_id: 'item_101', action_info: { action: 'PROVIDE_EVIDENCE' } },
+      { evidence_type: 'PROOF_OF_FULFILLMENT', source: 'REQUESTED_FROM_SELLER', item_id: 'item_102', action_info: { action: 'PROVIDE_EVIDENCE' } }
+    ]);
+    const s18Docs7 = [
+      { id: 'doc_101', trackingNumber: 'TRK_FEDEX_101', carrierName: 'FedEx', itemId: 'item_101' },
+      { id: 'doc_102', trackingNumber: 'TRK_UPS_102', carrierName: 'UPS', itemId: 'item_102' }
+    ];
+    const s18Mapped7 = paypalService.mapEvidenceToPayPalSchema({
+      liveDispute: s18Dispute7,
+      documents: s18Docs7
+    });
+    assert(s18Mapped7.evidences.length === 2, '18.7 Maps both item requests');
+    assert(s18Mapped7.evidences[0].item_id === 'item_101', '18.7 First evidence item is item_101');
+    assert(s18Mapped7.evidences[0].evidence_info.tracking_info.length === 1, '18.7 item_101 receives exactly 1 tracking item');
+    assert(s18Mapped7.evidences[0].evidence_info.tracking_info[0].tracking_number === 'TRK_FEDEX_101', '18.7 item_101 receives only TRK_FEDEX_101');
+    assert(s18Mapped7.evidences[1].item_id === 'item_102', '18.7 Second evidence item is item_102');
+    assert(s18Mapped7.evidences[1].evidence_info.tracking_info.length === 1, '18.7 item_102 receives exactly 1 tracking item');
+    assert(s18Mapped7.evidences[1].evidence_info.tracking_info[0].tracking_number === 'TRK_UPS_102', '18.7 item_102 receives only TRK_UPS_102');
+
+    // 18.8: Unassociated tracking record with no item ID excluded from item-specific requests
+    const s18Dispute8 = makePayPalDisputeFixture([
+      { evidence_type: 'PROOF_OF_FULFILLMENT', source: 'REQUESTED_FROM_SELLER', item_id: 'item_101', action_info: { action: 'PROVIDE_EVIDENCE' } }
+    ]);
+    const s18Docs8 = [
+      { id: 'doc_unassoc', trackingNumber: 'TRK_USPS_NO_ITEM', carrierName: 'USPS' } // no itemId
+    ];
+    const s18Mapped8 = paypalService.mapEvidenceToPayPalSchema({
+      liveDispute: s18Dispute8,
+      documents: s18Docs8
+    });
+    assert(!s18Mapped8.evidences[0].evidence_info?.tracking_info, '18.8 Unassociated tracking record excluded from item-specific evidence request');
+    assert(s18Mapped8._trackingMetadata[0].exclusionReason === 'UNASSOCIATED_ITEM_ID', '18.8 Metadata records UNASSOCIATED_ITEM_ID exclusion reason');
+
+    // 18.9: Mismatched item tracking record excluded and flagged
+    const s18Docs9 = [
+      { id: 'doc_wrong', trackingNumber: 'TRK_DHL_WRONG_ITEM', carrierName: 'DHL', itemId: 'item_999' }
+    ];
+    const s18Mapped9 = paypalService.mapEvidenceToPayPalSchema({
+      liveDispute: s18Dispute8,
+      documents: s18Docs9
+    });
+    assert(!s18Mapped9.evidences[0].evidence_info?.tracking_info, '18.9 Mismatched item tracking record excluded');
+    assert(s18Mapped9._trackingMetadata[0].exclusionReason === 'MISMATCHED_ITEM_ID', '18.9 Metadata records MISMATCHED_ITEM_ID exclusion reason');
+
+    // 18.10: Carrier rules: Never submit OTHER with empty carrier_name_other
+    const s18Dispute10 = makePayPalDisputeFixture([
+      { evidence_type: 'PROOF_OF_FULFILLMENT', source: 'REQUESTED_FROM_SELLER', action_info: { action: 'PROVIDE_EVIDENCE' } }
+    ]);
+    const s18Mapped10LiteralOther = paypalService.mapEvidenceToPayPalSchema({
+      liveDispute: s18Dispute10,
+      documents: [{ trackingNumber: '1234567890', carrierName: 'OTHER' }] // literally 'OTHER' with no specific name
+    });
+    assert(!s18Mapped10LiteralOther.evidences[0].evidence_info?.tracking_info, '18.10 Carrier name literally OTHER without name does not create tracking_info');
+    assert(s18Mapped10LiteralOther._trackingMetadata[0].exclusionReason === 'MISSING_CARRIER_NAME', '18.10 Excluded with MISSING_CARRIER_NAME');
+
+    // 18.11: Carrier rules: Unknown carrier properly maps to OTHER with carrier_name_other
+    const s18Mapped11LaserShip = paypalService.mapEvidenceToPayPalSchema({
+      liveDispute: s18Dispute10,
+      documents: [{ trackingNumber: 'LS123456789', carrierName: 'LaserShip Express' }]
+    });
+    assert(s18Mapped11LaserShip.evidences[0].evidence_info.tracking_info[0].carrier_name === 'OTHER', '18.11 LaserShip maps to OTHER');
+    assert(s18Mapped11LaserShip.evidences[0].evidence_info.tracking_info[0].carrier_name_other === 'LaserShip Express', '18.11 carrier_name_other contains LaserShip Express');
+
+    // 18.12: Schema restriction: tracking_info attached to PROOF_OF_FULFILLMENT
+    assert(s18Mapped11LaserShip.evidences[0].evidence_type === 'PROOF_OF_FULFILLMENT', '18.12 PROOF_OF_FULFILLMENT accepts tracking_info');
+
+    // 18.13: Schema restriction: tracking_info attached to PROOF_OF_RETURN
+    const s18DisputeReturn = makePayPalDisputeFixture([
+      { evidence_type: 'PROOF_OF_RETURN', source: 'REQUESTED_FROM_SELLER', action_info: { action: 'PROVIDE_EVIDENCE' } }
+    ]);
+    const s18MappedReturn = paypalService.mapEvidenceToPayPalSchema({
+      liveDispute: s18DisputeReturn,
+      documents: [{ trackingNumber: '9400100000000000000000', carrierName: 'USPS' }]
+    });
+    assert(s18MappedReturn.evidences[0].evidence_info.tracking_info.length === 1, '18.13 PROOF_OF_RETURN accepts tracking_info');
+    assert(s18MappedReturn.evidences[0].evidence_info.tracking_info[0].carrier_name === 'USPS', '18.13 Normalizes USPS');
+
+    // 18.14: Schema restriction: tracking_info NOT attached to PROOF_OF_DELIVERY_SIGNATURE
+    const s18DisputeSig = makePayPalDisputeFixture([
+      { evidence_type: 'PROOF_OF_DELIVERY_SIGNATURE', source: 'REQUESTED_FROM_SELLER', action_info: { action: 'PROVIDE_EVIDENCE' } }
+    ]);
+    const s18MappedSig = paypalService.mapEvidenceToPayPalSchema({
+      liveDispute: s18DisputeSig,
+      documents: [{ trackingNumber: '781294819201', carrierName: 'FedEx' }]
+    });
+    assert(!s18MappedSig.evidences[0].evidence_info?.tracking_info, '18.14 tracking_info strictly NOT attached to PROOF_OF_DELIVERY_SIGNATURE');
+
+    // 18.15: Schema restriction: tracking_info NOT attached to ONLINE_TRACKING_INFORMATION
+    const s18DisputeOnlineTrk = makePayPalDisputeFixture([
+      { evidence_type: 'ONLINE_TRACKING_INFORMATION', source: 'REQUESTED_FROM_SELLER', action_info: { action: 'PROVIDE_EVIDENCE' } }
+    ]);
+    const s18MappedOnlineTrk = paypalService.mapEvidenceToPayPalSchema({
+      liveDispute: s18DisputeOnlineTrk,
+      documents: [{ trackingNumber: '781294819201', carrierName: 'FedEx' }]
+    });
+    assert(!s18MappedOnlineTrk.evidences[0].evidence_info?.tracking_info, '18.15 tracking_info strictly NOT attached to ONLINE_TRACKING_INFORMATION');
+
+    // 18.16: Schema restriction: tracking_info NOT attached to RETURN_POLICY
+    const s18DisputePolicy = makePayPalDisputeFixture([
+      { evidence_type: 'RETURN_POLICY', source: 'REQUESTED_FROM_SELLER', action_info: { action: 'PROVIDE_EVIDENCE' } }
+    ]);
+    const s18MappedPolicy = paypalService.mapEvidenceToPayPalSchema({
+      liveDispute: s18DisputePolicy,
+      documents: [{ trackingNumber: '781294819201', carrierName: 'FedEx' }]
+    });
+    assert(!s18MappedPolicy.evidences[0].evidence_info?.tracking_info, '18.16 tracking_info strictly NOT attached to RETURN_POLICY');
+
+    // 18.17: PROOF_OF_REFUND accepts evidence_info.refund_ids
+    const s18DisputeRefund = makePayPalDisputeFixture([
+      { evidence_type: 'PROOF_OF_REFUND', source: 'REQUESTED_FROM_SELLER', action_info: { action: 'PROVIDE_EVIDENCE' } }
+    ]);
+    const s18MappedRefund = paypalService.mapEvidenceToPayPalSchema({
+      liveDispute: s18DisputeRefund,
+      dispute: { refund_ids: ['REF_PAYPAL_998877'] },
+      documents: []
+    });
+    assert(s18MappedRefund.evidences[0].evidence_info.refund_ids.includes('REF_PAYPAL_998877'), '18.17 PROOF_OF_REFUND attaches evidence_info.refund_ids');
+    assert(!s18MappedRefund.evidences[0].evidence_info.tracking_info, '18.17 PROOF_OF_REFUND does not attach tracking_info');
+
+    // 18.18: Live preflight rejects dispute where seller requests are associated with APPEAL
+    const s18PreflightAppeal = paypalService.validateLivePayPalDisputePreFlight(s18Dispute2);
+    assert(s18PreflightAppeal.valid === false, '18.18 Live preflight rejects dispute when seller requests match APPEAL instead of PROVIDE_EVIDENCE');
+    assert(s18PreflightAppeal.errors.some((e) => e.code === 'NO_SELLER_EVIDENCE_REQUESTED'), '18.18 Preflight cites NO_SELLER_EVIDENCE_REQUESTED');
 
     console.log('\n====================================================');
     console.log(`Summary: ${passed} Passed, ${failed} Failed`);
