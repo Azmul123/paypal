@@ -15,6 +15,30 @@ const axios = require('axios');
 const fs = require('fs');
 const path = require('path');
 
+/**
+ * Official PayPal Customer Disputes API v1 Supported Evidence Types
+ * Reference: https://developer.paypal.com/docs/api/customer-disputes/v1/#disputes_provide_evidence
+ */
+const KNOWN_PAYPAL_EVIDENCE_TYPES = new Set([
+  'PROOF_OF_FULFILLMENT',
+  'PROOF_OF_DELIVERY_SIGNATURE',
+  'PROOF_OF_RECEIPT_COPY',
+  'RETURN_POLICY',
+  'PROOF_OF_REFUND',
+  'PROOF_OF_RESIPMENT_OR_REPLACEMENT',
+  'CUSTOMS_DOCUMENT',
+  'ONLINE_TRACKING_INFORMATION',
+  'ADDITIONAL_INFORMATION_OF_ITEM',
+  'CREATE_SHIPPING_LABEL',
+  'POLICE_REPORT',
+  'DAMAGE_OR_REPLACEMENT_ESTIMATE',
+  'BUYER_CONFIRMATION',
+  'COPY_OF_CONTRACT',
+  'TERMINATION_AGREEMENT',
+  'VALID_SUPPORTING_DOCUMENT',
+  'OTHER'
+]);
+
 class PayPalService {
   constructor() {
     this.token = null;
@@ -374,7 +398,7 @@ class PayPalService {
   validateLivePayPalDisputePreFlight(paypalDispute) {
     const errors = [];
 
-    // Check status: Must be WAITING_FOR_SELLER_RESPONSE
+    // 1. Check status: Must be WAITING_FOR_SELLER_RESPONSE
     const status = (paypalDispute.status || '').toUpperCase();
     if (status !== 'WAITING_FOR_SELLER_RESPONSE') {
       errors.push({
@@ -383,7 +407,7 @@ class PayPalService {
       });
     }
 
-    // Check HATEOAS links for rel="provide-evidence"
+    // 2. Check HATEOAS links for rel="provide-evidence"
     const links = paypalDispute.links || paypalDispute.rawPayload?.links || [];
     const hasProvideEvidenceLink = links.some((l) => l.rel === 'provide-evidence');
     if (!hasProvideEvidenceLink) {
@@ -391,6 +415,26 @@ class PayPalService {
         code: 'HATEOAS_LINK_MISSING',
         message: 'Dispute details response does not contain a "provide-evidence" HATEOAS link. PayPal is not currently accepting evidence for this claim.'
       });
+    }
+
+    // 3. Check for evidence entries requested from seller (REQUESTED_FROM_SELLER)
+    const rawEvidences = paypalDispute.rawPayload?.evidences || paypalDispute.evidences || [];
+    const sellerRequests = rawEvidences.filter((e) => e && e.source === 'REQUESTED_FROM_SELLER');
+    if (sellerRequests.length === 0) {
+      errors.push({
+        code: 'NO_SELLER_EVIDENCE_REQUESTED',
+        message: 'PayPal dispute does not have any pending evidence requests for the seller (source: REQUESTED_FROM_SELLER).'
+      });
+    }
+
+    // 4. Check for unknown evidence types in seller requests
+    for (const req of sellerRequests) {
+      if (req.evidence_type && !KNOWN_PAYPAL_EVIDENCE_TYPES.has(req.evidence_type)) {
+        errors.push({
+          code: 'UNKNOWN_EVIDENCE_TYPE',
+          message: `PayPal dispute requested evidence type "${req.evidence_type}" is unknown or unsupported by PayPal Disputes schema.`
+        });
+      }
     }
 
     return {
@@ -401,108 +445,151 @@ class PayPalService {
 
   /**
    * Maps evidence documents and narrative to PayPal's official API schema.
-   * Dynamically inspects the live dispute's requested evidence types (evidences[].evidence_type, source).
-   * Does NOT rely on hardcoded dispute-reason mappings when live dispute requests specific evidence types.
-   * Keeps FlowPilot's Evidence Verification Matrix separate from PayPal's official requirements.
-   * Never classifies a document as sufficient merely because its filename or type matches.
+   * 
+   * STRICT PHASE 4.1 RULES:
+   * 1. Strictly selects evidence entries whose source is exactly 'REQUESTED_FROM_SELLER'.
+   * 2. Never interprets REQUESTED_FROM_BUYER, SUBMITTED_BY_BUYER, SUBMITTED_BY_SELLER, or SUBMITTED_BY_PARTNER as requests for seller evidence.
+   * 3. Never invents an evidence type based on dispute.reason.
+   * 4. Never silently substitutes another evidence type when no seller-requested type exists.
+   * 5. Keeps FlowPilot's internal Evidence Verification Matrix separate from PayPal's official evidence requirements.
+   * 6. If no applicable seller-requested evidence type exists, blocks submission with an actionable error.
+   * 7. Enforces tracking structure validation while explicitly rejecting false external verification claims.
    */
   mapEvidenceToPayPalSchema({ dispute, responsePackage, documents = [], liveDispute = null }) {
     const narrative = responsePackage?.narrative || '';
 
-    // 1. Inspect live dispute requested evidence types if present
-    const liveEvidences = liveDispute?.rawPayload?.evidences || liveDispute?.evidences || dispute?.rawPayload?.evidences || [];
-    const requestedTypes = [];
+    // 1. Retrieve all raw evidence records from live dispute or dispute payload
+    const liveEvidences = liveDispute?.rawPayload?.evidences || 
+                          liveDispute?.evidences || 
+                          dispute?.rawPayload?.evidences || 
+                          dispute?.evidences || [];
 
-    liveEvidences.forEach((ev) => {
-      // Look for evidence requested from SELLER or listed in dispute record
-      if (ev.evidence_type && (ev.source === 'PAYPAL' || ev.source === 'BUYER' || !ev.source)) {
-        requestedTypes.push(ev.evidence_type);
-      }
+    // 2. Filter strictly for evidence entries whose source is EXACTLY 'REQUESTED_FROM_SELLER'
+    // Exclude REQUESTED_FROM_BUYER, SUBMITTED_BY_BUYER, SUBMITTED_BY_SELLER, SUBMITTED_BY_PARTNER
+    const sellerRequestedEntries = liveEvidences.filter((ev) => {
+      return ev && ev.source === 'REQUESTED_FROM_SELLER';
     });
 
-    // 2. Select applicable evidence type: Check if available documents genuinely substantiate a requested type
-    let primaryEvidenceType = null;
-    let mappingProvenance = 'DEFAULT_CATEGORY_FALLBACK';
+    // 3. Block submission immediately if no seller-requested evidence exists
+    // Do NOT invent an evidence type based on dispute.reason
+    // Do NOT silently substitute another evidence type
+    // FlowPilot's internal Evidence Verification Matrix does NOT override PayPal's requirements
+    if (sellerRequestedEntries.length === 0) {
+      const error = new Error(
+        'No evidence is currently requested from seller (source: REQUESTED_FROM_SELLER) on this PayPal dispute. Submission blocked.'
+      );
+      error.code = 'NO_SELLER_EVIDENCE_REQUESTED';
+      error.statusCode = 422;
+      throw error;
+    }
 
-    if (requestedTypes.length > 0) {
-      for (const reqType of requestedTypes) {
-        const canSubstantiate = documents.some((doc) => {
-          // Never classify as sufficient merely from filename: require genuine verified fields
-          if (reqType === 'PROOF_OF_FULFILLMENT' && doc.trackingNumber && doc.trackingNumber.trim().length > 3) return true;
-          if (reqType === 'PROOF_OF_DELIVERY_SIGNATURE' && doc.documentType === 'PROOF_OF_DELIVERY' && doc.trackingNumber) return true;
-          if (reqType === 'PROOF_OF_RECEIPT_COPY' && doc.documentType === 'INVOICE') return true;
-          if (reqType === 'RETURN_POLICY' && (doc.documentType === 'TERMS_AND_CONDITIONS' || doc.documentType === 'RETURN_POLICY')) return true;
-          if (reqType === 'PROOF_OF_REFUND' && doc.documentType === 'REFUND_CONFIRMATION') return true;
-          return false;
-        });
-
-        if (canSubstantiate) {
-          primaryEvidenceType = reqType;
-          mappingProvenance = 'LIVE_PAYPAL_REQUESTED_TYPE';
-          break;
-        }
-      }
-
-      if (!primaryEvidenceType) {
-        primaryEvidenceType = requestedTypes[0];
-        mappingProvenance = 'LIVE_PAYPAL_REQUESTED_UNSUBSTANTIATED';
+    // 4. Validate evidence_type of each seller request against official PayPal schema
+    for (const req of sellerRequestedEntries) {
+      if (!req.evidence_type || !KNOWN_PAYPAL_EVIDENCE_TYPES.has(req.evidence_type)) {
+        const error = new Error(
+          `PayPal requested evidence type "${req.evidence_type}" is unknown or unsupported by the PayPal Customer Disputes API schema.`
+        );
+        error.code = 'UNKNOWN_EVIDENCE_TYPE';
+        error.statusCode = 422;
+        throw error;
       }
     }
 
-    if (!primaryEvidenceType) {
-      // Fallback only if live dispute did not specify requested evidence types
-      if (dispute.reason === 'MERCHANDISE_OR_SERVICE_NOT_RECEIVED') {
-        primaryEvidenceType = 'PROOF_OF_FULFILLMENT';
-      } else if (dispute.reason === 'MERCHANDISE_OR_SERVICE_NOT_AS_DESCRIBED') {
-        primaryEvidenceType = 'RETURN_POLICY';
-      } else if (dispute.reason === 'UNAUTHORISED') {
-        primaryEvidenceType = 'PROOF_OF_FULFILLMENT';
-      } else {
-        primaryEvidenceType = 'OTHER';
-      }
-      mappingProvenance = 'REASON_CATEGORY_FALLBACK';
-    }
-
-    // 3. Extract verified tracking info from documents ONLY when tracking number is genuinely present
+    // 5. Tracking Information Processing & Safeguards
+    // Keep separate: field is present, valid structure, externally verified
+    // A tracking number passing a length or structure check is NEVER claimed as externally verified
     const trackingInfoList = [];
+    const trackingMetadataList = [];
     const validCarriers = ['FEDEX', 'UPS', 'USPS', 'DHL'];
 
     documents.forEach((doc) => {
-      if (doc.trackingNumber && typeof doc.trackingNumber === 'string' && doc.trackingNumber.trim().length > 3) {
-        const rawCarrier = (doc.carrierName || '').toUpperCase().trim();
-        let matchedCarrier = 'OTHER';
-        let otherCarrier = doc.carrierName ? doc.carrierName.trim() : null;
+      const rawTracking = doc.trackingNumber ? String(doc.trackingNumber).trim() : '';
+      const fieldPresent = Boolean(rawTracking);
 
+      if (!fieldPresent) {
+        trackingMetadataList.push({
+          documentId: doc.id,
+          fieldPresent: false,
+          validStructure: false,
+          hasCarrierSpecified: false,
+          externallyVerified: false,
+          verificationStatus: 'NOT_APPLICABLE',
+          verificationNote: 'Tracking number not present on document.'
+        });
+        return;
+      }
+
+      // Tracking number is present - validate structure against PayPal schema
+      const rawCarrier = (doc.carrierName || '').toUpperCase().trim();
+      let matchedCarrier = 'OTHER';
+      let otherCarrier = undefined;
+
+      if (rawCarrier) {
         for (const c of validCarriers) {
           if (rawCarrier.includes(c)) {
             matchedCarrier = c;
-            otherCarrier = null;
             break;
           }
         }
-
-        trackingInfoList.push({
-          carrier_name: matchedCarrier,
-          carrier_name_other: otherCarrier,
-          tracking_number: doc.trackingNumber.trim()
-        });
+        if (matchedCarrier === 'OTHER') {
+          otherCarrier = doc.carrierName.trim();
+        }
+      } else {
+        // Tracking number present but associated carrier information missing
+        matchedCarrier = 'OTHER';
+        otherCarrier = undefined;
       }
+
+      const trackingItem = {
+        carrier_name: matchedCarrier,
+        tracking_number: rawTracking
+      };
+      if (otherCarrier) {
+        trackingItem.carrier_name_other = otherCarrier;
+      }
+
+      trackingInfoList.push(trackingItem);
+
+      trackingMetadataList.push({
+        documentId: doc.id,
+        fieldPresent: true,
+        validStructure: true,
+        carrierName: matchedCarrier,
+        carrierNameOther: otherCarrier || null,
+        hasCarrierSpecified: Boolean(rawCarrier),
+        externallyVerified: false, // Strict: Do NOT claim external verification unless a real carrier verification integration exists
+        verificationStatus: 'UNVERIFIED_MERCHANT_ENTRY',
+        verificationNote: 'Structure validated against PayPal schema; not externally verified with carrier tracking API.'
+      });
     });
 
-    const evidenceEntry = {
-      evidence_type: primaryEvidenceType,
-      notes: narrative.slice(0, 2000)
-    };
-
-    if (trackingInfoList.length > 0 && (primaryEvidenceType === 'PROOF_OF_FULFILLMENT' || primaryEvidenceType === 'PROOF_OF_DELIVERY_SIGNATURE' || primaryEvidenceType === 'OTHER')) {
-      evidenceEntry.evidence_info = {
-        tracking_info: trackingInfoList
+    // 6. Map each seller-requested evidence type to an entry in the PayPal evidences array
+    const evidenceEntries = sellerRequestedEntries.map((req) => {
+      const entry = {
+        evidence_type: req.evidence_type,
+        notes: narrative.slice(0, 2000)
       };
-    }
+
+      if (req.item_id) {
+        entry.item_id = req.item_id;
+      }
+
+      // Attach tracking_info ONLY if the requested evidence type accepts shipping tracking
+      const acceptsTracking = ['PROOF_OF_FULFILLMENT', 'PROOF_OF_DELIVERY_SIGNATURE', 'ONLINE_TRACKING_INFORMATION'].includes(req.evidence_type);
+      if (acceptsTracking && trackingInfoList.length > 0) {
+        entry.evidence_info = {
+          tracking_info: trackingInfoList
+        };
+      }
+
+      return entry;
+    });
 
     return {
-      evidences: [evidenceEntry],
-      _mappingProvenance: mappingProvenance
+      evidences: evidenceEntries,
+      _mappingProvenance: 'PAYPAL_REQUESTED_FROM_SELLER',
+      _selectedEvidenceTypes: sellerRequestedEntries.map((e) => e.evidence_type),
+      _trackingMetadata: trackingMetadataList
     };
   }
 
@@ -619,11 +706,27 @@ class PayPalService {
 
     // 5. Build official request payload
     const paypalDisputeId = dispute.paypalDisputeId || dispute.id.replace('disp_', '');
-    const inputData = this.mapEvidenceToPayPalSchema({
-      dispute,
-      responsePackage,
-      documents: docsToValidate
-    });
+    let inputData;
+    try {
+      inputData = this.mapEvidenceToPayPalSchema({
+        dispute,
+        responsePackage,
+        documents: docsToValidate,
+        liveDispute: dispute
+      });
+    } catch (mapErr) {
+      if (mapErr.code === 'NO_SELLER_EVIDENCE_REQUESTED' || mapErr.code === 'UNKNOWN_EVIDENCE_TYPE') {
+        return {
+          success: false,
+          status: mapErr.code,
+          error: mapErr.message,
+          guidance: mapErr.code === 'NO_SELLER_EVIDENCE_REQUESTED'
+            ? 'PayPal Customer Disputes API only accepts seller evidence when evidence is explicitly REQUESTED_FROM_SELLER. You can export the Defense Dossier JSON for manual review.'
+            : 'Review the evidence requirements in the PayPal Resolution Center.'
+        };
+      }
+      throw mapErr;
+    }
 
     const { payloadBuffer, contentType } = this.buildMultipartPayload({
       inputData,
@@ -686,12 +789,25 @@ class PayPalService {
     }
 
     // Map with live dispute requested evidence types
-    const liveInputData = this.mapEvidenceToPayPalSchema({
-      dispute,
-      responsePackage,
-      documents: docsToValidate,
-      liveDispute
-    });
+    let liveInputData;
+    try {
+      liveInputData = this.mapEvidenceToPayPalSchema({
+        dispute,
+        responsePackage,
+        documents: docsToValidate,
+        liveDispute
+      });
+    } catch (mapErr) {
+      if (mapErr.code === 'NO_SELLER_EVIDENCE_REQUESTED' || mapErr.code === 'UNKNOWN_EVIDENCE_TYPE') {
+        return {
+          success: false,
+          status: mapErr.code,
+          error: mapErr.message,
+          guidance: 'PayPal Customer Disputes API only accepts seller evidence when evidence is explicitly REQUESTED_FROM_SELLER.'
+        };
+      }
+      throw mapErr;
+    }
 
     const liveMultipart = this.buildMultipartPayload({
       inputData: liveInputData,
@@ -791,4 +907,6 @@ class PayPalService {
   }
 }
 
-module.exports = new PayPalService();
+const instance = new PayPalService();
+instance.KNOWN_PAYPAL_EVIDENCE_TYPES = KNOWN_PAYPAL_EVIDENCE_TYPES;
+module.exports = instance;

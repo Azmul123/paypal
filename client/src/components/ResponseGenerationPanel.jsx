@@ -285,7 +285,7 @@ export default function ResponseGenerationPanel({ dispute, refreshTrigger }) {
         return (
           <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-xs font-semibold bg-blue-50 text-blue-700 border border-blue-200">
             <Send className="w-3.5 h-3.5 text-blue-600" />
-            <span>SUBMITTED TO PAYPAL</span>
+            <span>{dispute?.source === 'demo' ? 'SIMULATED DEMO (NOT SENT TO PAYPAL)' : 'SUBMITTED TO PAYPAL SANDBOX'}</span>
           </span>
         );
       case 'APPROVED':
@@ -749,7 +749,7 @@ export default function ResponseGenerationPanel({ dispute, refreshTrigger }) {
                     <th className="px-4 py-2.5">Category</th>
                     <th className="px-4 py-2.5">Tracking / Details</th>
                     <th className="px-4 py-2.5">Size</th>
-                    <th className="px-4 py-2.5 text-right">Binary Status</th>
+                    <th className="px-4 py-2.5 text-right">Storage Status</th>
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-slate-100">
@@ -769,7 +769,12 @@ export default function ResponseGenerationPanel({ dispute, refreshTrigger }) {
                         </td>
                         <td className="px-4 py-2.5 text-[11px] text-slate-600 font-mono">
                           {doc.trackingNumber ? (
-                            <span>{doc.carrierName || 'Carrier'}: {doc.trackingNumber}</span>
+                            <div>
+                              <span className="font-semibold text-slate-800">{doc.carrierName || 'Other'}: {doc.trackingNumber}</span>
+                              <span className="text-[10px] text-slate-400 block font-sans">
+                                (Format valid &bull; Unverified by carrier API)
+                              </span>
+                            </div>
                           ) : (
                             <span className="text-slate-400 italic">No tracking #</span>
                           )}
@@ -778,9 +783,9 @@ export default function ResponseGenerationPanel({ dispute, refreshTrigger }) {
                           {doc.fileSizeBytes ? `${Math.round(doc.fileSizeBytes / 1024)} KB` : 'N/A'}
                         </td>
                         <td className="px-4 py-2.5 text-right">
-                          <span className="inline-flex items-center gap-1 text-[11px] font-semibold text-emerald-700">
-                            <CheckCircle2 className="w-3 h-3 text-emerald-600" />
-                            <span>Verified</span>
+                          <span className="inline-flex items-center gap-1 text-[11px] font-semibold text-slate-700">
+                            <CheckCircle2 className="w-3 h-3 text-slate-500" />
+                            <span>File Stored</span>
                           </span>
                         </td>
                       </tr>
@@ -931,6 +936,16 @@ export default function ResponseGenerationPanel({ dispute, refreshTrigger }) {
                 </button>
               </div>
             </div>
+
+            {/* Synthetic Demo Guard Notice */}
+            {dispute?.source === 'demo' && (
+              <div className="p-3 bg-amber-50/80 border border-amber-200/90 rounded-lg text-[11px] text-amber-800 flex items-center gap-2">
+                <AlertCircle className="w-3.5 h-3.5 text-amber-600 flex-shrink-0" />
+                <span>
+                  <strong>Demo Mode Guard:</strong> This dispute is a synthetic demo case. The official PayPal Sandbox API requires an actual dispute created in your Sandbox merchant account. Use <strong>Pre-Flight Dry Run</strong> or <strong>Export Dossier (.json)</strong> for review.
+                </span>
+              </div>
+            )}
 
             {/* Pre-flight Checklist Display */}
             {preflightResult && (

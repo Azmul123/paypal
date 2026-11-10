@@ -1145,11 +1145,18 @@ Carrier: FedEx Tracking: 781294819201 Delivered`;
     assert(multipartStr.includes('Content-Type: application/pdf'), '16.9 File part has application/pdf Content-Type');
     assert(multipartStr.endsWith(`--${multipart.boundary}--\r\n`), '16.9 Ends with proper multipart closing boundary');
 
-    // 16.10: Evidence Mapping to PayPal Schema
+    // 16.10: Evidence Mapping to PayPal Schema with Official REQUESTED_FROM_SELLER
+    const liveDisputeWithSellerReq = {
+      dispute_id: 'PP-D-94821',
+      status: 'WAITING_FOR_SELLER_RESPONSE',
+      reason: 'MERCHANDISE_OR_SERVICE_NOT_RECEIVED',
+      evidences: [{ evidence_type: 'PROOF_OF_FULFILLMENT', source: 'REQUESTED_FROM_SELLER', date: '2026-11-02T09:14:22Z' }]
+    };
     const mapped = paypalService.mapEvidenceToPayPalSchema({
       dispute: { reason: 'MERCHANDISE_OR_SERVICE_NOT_RECEIVED' },
       responsePackage: { narrative: 'Item delivered by courier on Oct 28' },
-      documents: [{ carrierName: 'FedEx Express', trackingNumber: '781294819201' }]
+      documents: [{ carrierName: 'FedEx Express', trackingNumber: '781294819201' }],
+      liveDispute: liveDisputeWithSellerReq
     });
     assert(Array.isArray(mapped.evidences), '16.10 Mapped schema produces evidences array');
     assert(mapped.evidences[0].evidence_type === 'PROOF_OF_FULFILLMENT', '16.10 Maps INR to PROOF_OF_FULFILLMENT');
@@ -1159,8 +1166,10 @@ Carrier: FedEx Tracking: 781294819201 Delivered`;
 
     // 16.10b: Dynamic evidence type mapping when live dispute requests specific evidence types
     const liveDisputeWithInvoiceReq = {
+      dispute_id: 'PP-D-94821',
+      status: 'WAITING_FOR_SELLER_RESPONSE',
       reason: 'MERCHANDISE_OR_SERVICE_NOT_RECEIVED',
-      evidences: [{ evidence_type: 'PROOF_OF_RECEIPT_COPY', source: 'PAYPAL' }]
+      evidences: [{ evidence_type: 'PROOF_OF_RECEIPT_COPY', source: 'REQUESTED_FROM_SELLER' }]
     };
     const dynamicMapped = paypalService.mapEvidenceToPayPalSchema({
       dispute: { reason: 'MERCHANDISE_OR_SERVICE_NOT_RECEIVED' },
@@ -1169,20 +1178,22 @@ Carrier: FedEx Tracking: 781294819201 Delivered`;
       liveDispute: liveDisputeWithInvoiceReq
     });
     assert(dynamicMapped.evidences[0].evidence_type === 'PROOF_OF_RECEIPT_COPY', '16.10b Uses live dispute requested evidence_type rather than hardcoded reason fallback');
-    assert(dynamicMapped._mappingProvenance === 'LIVE_PAYPAL_REQUESTED_TYPE', '16.10b Provenance identifies LIVE_PAYPAL_REQUESTED_TYPE');
+    assert(dynamicMapped._mappingProvenance === 'PAYPAL_REQUESTED_FROM_SELLER', '16.10b Provenance identifies PAYPAL_REQUESTED_FROM_SELLER');
 
     // 16.10c: Does NOT claim tracking info if document does not genuinely have a tracking number
     const noTrackingMapped = paypalService.mapEvidenceToPayPalSchema({
       dispute: { reason: 'MERCHANDISE_OR_SERVICE_NOT_RECEIVED' },
       responsePackage: { narrative: 'Delivery note' },
-      documents: [{ documentType: 'PROOF_OF_DELIVERY', fileName: 'pod_untracked.pdf' }]
+      documents: [{ documentType: 'PROOF_OF_DELIVERY', fileName: 'pod_untracked.pdf' }],
+      liveDispute: liveDisputeWithSellerReq
     });
     assert(!noTrackingMapped.evidences[0].evidence_info?.tracking_info, '16.10c Does not fabricate tracking_info when document lacks valid tracking number');
 
     // 16.11: Pre-flight Live Status Check Rejects Non-Waiting Stage
     const liveStageCheck = paypalService.validateLivePayPalDisputePreFlight({
       status: 'UNDER_REVIEW',
-      links: [{ rel: 'provide-evidence' }]
+      links: [{ rel: 'provide-evidence' }],
+      evidences: [{ evidence_type: 'PROOF_OF_FULFILLMENT', source: 'REQUESTED_FROM_SELLER' }]
     });
     assert(liveStageCheck.valid === false, '16.11 Live pre-flight rejects status other than WAITING_FOR_SELLER_RESPONSE');
     assert(liveStageCheck.errors.some((e) => e.code === 'INVALID_LIFECYCLE_STAGE'), '16.11 Cites INVALID_LIFECYCLE_STAGE');
@@ -1190,7 +1201,8 @@ Carrier: FedEx Tracking: 781294819201 Delivered`;
     // 16.12: Pre-flight HATEOAS Link Check Rejects Missing Link
     const hateoasCheck = paypalService.validateLivePayPalDisputePreFlight({
       status: 'WAITING_FOR_SELLER_RESPONSE',
-      links: [{ rel: 'self' }]
+      links: [{ rel: 'self' }],
+      evidences: [{ evidence_type: 'PROOF_OF_FULFILLMENT', source: 'REQUESTED_FROM_SELLER' }]
     });
     assert(hateoasCheck.valid === false, '16.12 Live pre-flight rejects dispute missing provide-evidence link');
     assert(hateoasCheck.errors.some((e) => e.code === 'HATEOAS_LINK_MISSING'), '16.12 Cites HATEOAS_LINK_MISSING');
@@ -1236,6 +1248,207 @@ Carrier: FedEx Tracking: 781294819201 Delivered`;
     const recordedPkg = responseService.getResponsePackage('disp_fp_101');
     assert(recordedPkg.status === 'SUBMITTED', '16.16 Package status transitions to SUBMITTED after confirmed submission');
     assert(recordedPkg.submission.paypalAcknowledgementId === 'ack_sandbox_test_7788', '16.16 Package records PayPal acknowledgement ID');
+
+    // =========================================================================
+    // [Suite 17: Phase 4.1 PayPal Evidence Mapping & Tracking Safeguards Audit]
+    // =========================================================================
+    console.log('\n[Suite 17: Phase 4.1 PayPal Evidence Mapping & Tracking Safeguards Audit]');
+
+    const makePayPalDisputeFixture = (evidenceEntries = [], status = 'WAITING_FOR_SELLER_RESPONSE') => ({
+      dispute_id: 'PP-D-84920',
+      create_time: '2026-11-01T10:00:00.000Z',
+      update_time: '2026-11-03T12:00:00.000Z',
+      status,
+      dispute_life_cycle_stage: 'CHARGEBACK',
+      dispute_channel: 'INTERNAL',
+      dispute_amount: {
+        currency_code: 'USD',
+        value: '249.99'
+      },
+      dispute_reason: 'MERCHANDISE_OR_SERVICE_NOT_RECEIVED',
+      disputed_transactions: [
+        {
+          buyer_transaction_id: '9TX4829104821034A',
+          seller_transaction_id: '8KL4920194821021C',
+          transaction_status: 'COMPLETED',
+          gross_amount: {
+            currency_code: 'USD',
+            value: '249.99'
+          },
+          buyer: {
+            name: 'Marcus Vance'
+          }
+        }
+      ],
+      evidences: evidenceEntries,
+      links: [
+        {
+          href: 'https://api-m.sandbox.paypal.com/v1/customer/disputes/PP-D-84920/provide-evidence',
+          rel: 'provide-evidence',
+          method: 'POST'
+        },
+        {
+          href: 'https://api-m.sandbox.paypal.com/v1/customer/disputes/PP-D-84920',
+          rel: 'self',
+          method: 'GET'
+        }
+      ]
+    });
+
+    // 17.1: REQUESTED_FROM_SELLER is correctly selected
+    const s17Dispute1 = makePayPalDisputeFixture([
+      { evidence_type: 'PROOF_OF_FULFILLMENT', source: 'REQUESTED_FROM_SELLER', date: '2026-11-02T10:00:00Z' }
+    ]);
+    const s17Mapped1 = paypalService.mapEvidenceToPayPalSchema({
+      dispute: { id: 'disp_17_1' },
+      liveDispute: s17Dispute1,
+      responsePackage: { narrative: 'Fulfilled on time' },
+      documents: [{ trackingNumber: '781294819201', carrierName: 'FedEx Express' }]
+    });
+    assert(s17Mapped1.evidences[0].evidence_type === 'PROOF_OF_FULFILLMENT', '17.1 REQUESTED_FROM_SELLER correctly selected');
+    assert(s17Mapped1._mappingProvenance === 'PAYPAL_REQUESTED_FROM_SELLER', '17.1 Provenance is PAYPAL_REQUESTED_FROM_SELLER');
+
+    // 17.2: REQUESTED_FROM_BUYER is never selected
+    const s17Dispute2 = makePayPalDisputeFixture([
+      { evidence_type: 'DAMAGE_OR_REPLACEMENT_ESTIMATE', source: 'REQUESTED_FROM_BUYER', date: '2026-11-02T10:00:00Z' }
+    ]);
+    let err17_2 = null;
+    try {
+      paypalService.mapEvidenceToPayPalSchema({ liveDispute: s17Dispute2, documents: [] });
+    } catch (e) {
+      err17_2 = e;
+    }
+    assert(err17_2 !== null && err17_2.code === 'NO_SELLER_EVIDENCE_REQUESTED', '17.2 REQUESTED_FROM_BUYER is never selected for seller submission');
+
+    // 17.3: SUBMITTED_BY_BUYER is never selected
+    const s17Dispute3 = makePayPalDisputeFixture([
+      { evidence_type: 'POLICE_REPORT', source: 'SUBMITTED_BY_BUYER', date: '2026-11-02T10:00:00Z' }
+    ]);
+    let err17_3 = null;
+    try {
+      paypalService.mapEvidenceToPayPalSchema({ liveDispute: s17Dispute3, documents: [] });
+    } catch (e) {
+      err17_3 = e;
+    }
+    assert(err17_3 !== null && err17_3.code === 'NO_SELLER_EVIDENCE_REQUESTED', '17.3 SUBMITTED_BY_BUYER is never selected for seller submission');
+
+    // 17.4: SUBMITTED_BY_SELLER is never treated as a new request
+    const s17Dispute4 = makePayPalDisputeFixture([
+      { evidence_type: 'PROOF_OF_FULFILLMENT', source: 'SUBMITTED_BY_SELLER', date: '2026-11-02T10:00:00Z' }
+    ]);
+    let err17_4 = null;
+    try {
+      paypalService.mapEvidenceToPayPalSchema({ liveDispute: s17Dispute4, documents: [] });
+    } catch (e) {
+      err17_4 = e;
+    }
+    assert(err17_4 !== null && err17_4.code === 'NO_SELLER_EVIDENCE_REQUESTED', '17.4 SUBMITTED_BY_SELLER is never treated as a pending seller request');
+
+    // 17.5: SUBMITTED_BY_PARTNER is never selected
+    const s17Dispute5 = makePayPalDisputeFixture([
+      { evidence_type: 'CUSTOMS_DOCUMENT', source: 'SUBMITTED_BY_PARTNER', date: '2026-11-02T10:00:00Z' }
+    ]);
+    let err17_5 = null;
+    try {
+      paypalService.mapEvidenceToPayPalSchema({ liveDispute: s17Dispute5, documents: [] });
+    } catch (e) {
+      err17_5 = e;
+    }
+    assert(err17_5 !== null && err17_5.code === 'NO_SELLER_EVIDENCE_REQUESTED', '17.5 SUBMITTED_BY_PARTNER is never selected for seller submission');
+
+    // 17.6: Multiple evidence entries, including multiple seller-requested types
+    const s17Dispute6 = makePayPalDisputeFixture([
+      { evidence_type: 'DAMAGE_OR_REPLACEMENT_ESTIMATE', source: 'SUBMITTED_BY_BUYER', date: '2026-11-02T09:00:00Z' },
+      { evidence_type: 'PROOF_OF_FULFILLMENT', source: 'REQUESTED_FROM_SELLER', item_id: 'item_101', date: '2026-11-02T10:00:00Z' },
+      { evidence_type: 'POLICE_REPORT', source: 'REQUESTED_FROM_BUYER', date: '2026-11-02T11:00:00Z' },
+      { evidence_type: 'PROOF_OF_RECEIPT_COPY', source: 'REQUESTED_FROM_SELLER', item_id: 'item_102', date: '2026-11-02T12:00:00Z' },
+      { evidence_type: 'CUSTOMS_DOCUMENT', source: 'SUBMITTED_BY_PARTNER', date: '2026-11-02T13:00:00Z' }
+    ]);
+    const s17Mapped6 = paypalService.mapEvidenceToPayPalSchema({
+      liveDispute: s17Dispute6,
+      documents: [{ trackingNumber: '781294819201', carrierName: 'FedEx Express' }]
+    });
+    assert(s17Mapped6.evidences.length === 2, '17.6 Maps exactly the 2 seller-requested evidence types from mixed dispute');
+    assert(s17Mapped6.evidences[0].evidence_type === 'PROOF_OF_FULFILLMENT', '17.6 First mapped type is PROOF_OF_FULFILLMENT');
+    assert(s17Mapped6.evidences[0].item_id === 'item_101', '17.6 Preserves item_id on seller-requested evidence');
+    assert(s17Mapped6.evidences[1].evidence_type === 'PROOF_OF_RECEIPT_COPY', '17.6 Second mapped type is PROOF_OF_RECEIPT_COPY');
+    assert(!s17Mapped6.evidences.some((e) => e.evidence_type === 'POLICE_REPORT' || e.evidence_type === 'CUSTOMS_DOCUMENT'), '17.6 Buyer and partner evidence completely excluded');
+
+    // 17.7: Empty or missing evidences array
+    const s17DisputeEmpty = makePayPalDisputeFixture([]);
+    const s17DisputeMissing = makePayPalDisputeFixture();
+    delete s17DisputeMissing.evidences;
+    let err17_7a = null, err17_7b = null;
+    try { paypalService.mapEvidenceToPayPalSchema({ liveDispute: s17DisputeEmpty, documents: [] }); } catch (e) { err17_7a = e; }
+    try { paypalService.mapEvidenceToPayPalSchema({ liveDispute: s17DisputeMissing, documents: [] }); } catch (e) { err17_7b = e; }
+    assert(err17_7a !== null && err17_7a.code === 'NO_SELLER_EVIDENCE_REQUESTED', '17.7 Throws NO_SELLER_EVIDENCE_REQUESTED for empty evidences array');
+    assert(err17_7b !== null && err17_7b.code === 'NO_SELLER_EVIDENCE_REQUESTED', '17.7 Throws NO_SELLER_EVIDENCE_REQUESTED for missing evidences array');
+
+    // 17.8: Unknown evidence type
+    const s17DisputeUnknown = makePayPalDisputeFixture([
+      { evidence_type: 'NON_EXISTENT_FABRICATED_TYPE_99', source: 'REQUESTED_FROM_SELLER', date: '2026-11-02T10:00:00Z' }
+    ]);
+    let err17_8 = null;
+    try {
+      paypalService.mapEvidenceToPayPalSchema({ liveDispute: s17DisputeUnknown, documents: [] });
+    } catch (e) {
+      err17_8 = e;
+    }
+    assert(err17_8 !== null && err17_8.code === 'UNKNOWN_EVIDENCE_TYPE', '17.8 Throws UNKNOWN_EVIDENCE_TYPE for unrecognized evidence type');
+
+    // 17.9: Missing tracking number
+    const s17Dispute9 = makePayPalDisputeFixture([
+      { evidence_type: 'PROOF_OF_FULFILLMENT', source: 'REQUESTED_FROM_SELLER' }
+    ]);
+    const s17Mapped9 = paypalService.mapEvidenceToPayPalSchema({
+      liveDispute: s17Dispute9,
+      documents: [{ documentType: 'PROOF_OF_DELIVERY', fileName: 'untracked_pod.pdf' }]
+    });
+    assert(s17Mapped9.evidences[0].evidence_type === 'PROOF_OF_FULFILLMENT', '17.9 Maps requested type when tracking number is missing');
+    assert(!s17Mapped9.evidences[0].evidence_info?.tracking_info, '17.9 tracking_info omitted when document lacks tracking number');
+    assert(s17Mapped9._trackingMetadata[0].fieldPresent === false, '17.9 Metadata confirms tracking number fieldPresent is false');
+    assert(s17Mapped9._trackingMetadata[0].validStructure === false, '17.9 Metadata confirms validStructure is false');
+
+    // 17.10: Tracking number present but associated carrier information missing
+    const s17Dispute10 = makePayPalDisputeFixture([
+      { evidence_type: 'PROOF_OF_FULFILLMENT', source: 'REQUESTED_FROM_SELLER' }
+    ]);
+    const s17Mapped10 = paypalService.mapEvidenceToPayPalSchema({
+      liveDispute: s17Dispute10,
+      documents: [{ trackingNumber: '9400111899562537624128' }] // no carrierName provided
+    });
+    assert(s17Mapped10.evidences[0].evidence_info.tracking_info[0].tracking_number === '9400111899562537624128', '17.10 Preserves valid tracking number');
+    assert(s17Mapped10.evidences[0].evidence_info.tracking_info[0].carrier_name === 'OTHER', '17.10 Normalizes missing carrier to OTHER');
+    assert(s17Mapped10.evidences[0].evidence_info.tracking_info[0].carrier_name_other === undefined, '17.10 carrier_name_other is undefined when unprovided');
+    assert(s17Mapped10._trackingMetadata[0].fieldPresent === true, '17.10 Tracking metadata: fieldPresent is true');
+    assert(s17Mapped10._trackingMetadata[0].validStructure === true, '17.10 Tracking metadata: validStructure is true');
+    assert(s17Mapped10._trackingMetadata[0].hasCarrierSpecified === false, '17.10 Tracking metadata: hasCarrierSpecified is false');
+    assert(s17Mapped10._trackingMetadata[0].externallyVerified === false, '17.10 Tracking metadata: externallyVerified is strictly false');
+
+    // 17.11: No seller-requested evidence — submission blocked
+    const s17Dispute11 = makePayPalDisputeFixture([
+      { evidence_type: 'POLICE_REPORT', source: 'SUBMITTED_BY_BUYER' }
+    ]);
+    const s17Preflight11 = paypalService.validateLivePayPalDisputePreFlight(s17Dispute11);
+    assert(s17Preflight11.valid === false, '17.11 Preflight fails when no seller evidence is requested');
+    assert(s17Preflight11.errors.some((e) => e.code === 'NO_SELLER_EVIDENCE_REQUESTED'), '17.11 Preflight cites NO_SELLER_EVIDENCE_REQUESTED');
+
+    // 17.12: Internal FlowPilot matrix does not override PayPal's requested evidence types
+    const s17Dispute12 = makePayPalDisputeFixture([
+      { evidence_type: 'RETURN_POLICY', source: 'REQUESTED_FROM_SELLER' }
+    ]);
+    const s17Mapped12 = paypalService.mapEvidenceToPayPalSchema({
+      dispute: { reason: 'MERCHANDISE_OR_SERVICE_NOT_RECEIVED' },
+      liveDispute: s17Dispute12,
+      responsePackage: {
+        evidenceMatrix: [
+          { requirementId: 'req_inr_pod', requirementText: 'Proof of Delivery', status: 'SUPPORTED' }
+        ]
+      },
+      documents: [{ documentType: 'TERMS_AND_CONDITIONS', fileName: 'return_policy.pdf' }]
+    });
+    assert(s17Mapped12.evidences[0].evidence_type === 'RETURN_POLICY', '17.12 Official PayPal requested type (RETURN_POLICY) is preserved');
+    assert(s17Mapped12.evidences[0].evidence_type !== 'PROOF_OF_FULFILLMENT', '17.12 Internal matrix (PROOF_OF_FULFILLMENT) does not override PayPal requested type');
 
     console.log('\n====================================================');
     console.log(`Summary: ${passed} Passed, ${failed} Failed`);

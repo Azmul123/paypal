@@ -259,7 +259,9 @@ router.post('/submit', async (req, res) => {
       result.status === 'ATTACHMENT_FILE_MISSING' ? 400 :
       result.status === 'INSUFFICIENT_SCOPE' ? 403 :
       result.status === 'INVALID_LIFECYCLE_STAGE' ||
-      result.status === 'HATEOAS_LINK_MISSING' ? 422 :
+      result.status === 'HATEOAS_LINK_MISSING' ||
+      result.status === 'NO_SELLER_EVIDENCE_REQUESTED' ||
+      result.status === 'UNKNOWN_EVIDENCE_TYPE' ? 422 :
       result.status === 'SUBMISSION_UNKNOWN' ? 504 : 502
     );
 
