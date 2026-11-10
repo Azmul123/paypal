@@ -30,3 +30,6 @@ Thumbs.db
 server/uploads/
 server/data/*.tmp*
 server/data/*.corrupted*
+
+.vercel
+.env*
