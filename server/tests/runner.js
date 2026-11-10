@@ -12,6 +12,7 @@ const evidenceValidator = require('../services/evidenceValidator');
 const evidenceIntelligenceService = require('../services/evidenceIntelligenceService');
 const evidenceService = require('../services/evidenceService');
 const storageService = require('../services/storageService');
+const responseService = require('../services/responseService');
 
 let server;
 const PORT = 5099;
@@ -822,6 +823,223 @@ Carrier: FedEx Tracking: 781294819201 Delivered`;
     assert(finalHealth.body.modules.includes('Evidence Management'), '14.17 Health check reports Evidence Management active');
     assert(finalHealth.body.modules.includes('AI Evidence Intelligence'), '14.17 Health check reports AI Evidence Intelligence active');
     assert(finalHealth.body.modules.includes('Dispute Management'), '14.17 Health check reports Dispute Management active');
+    assert(finalHealth.body.modules.includes('Response Generation'), '14.17 Health check reports Response Generation active');
+    assert(finalHealth.body.version === '1.4.0', '14.17 Health check reports version 1.4.0');
+
+    // [Suite 15: Module 4 Response Generation & Synthetic Test Cases]
+    console.log('\n[Suite 15: Module 4 Response Generation & Synthetic Test Cases]');
+
+    // 15.1: Raw Evidence Bundle Compilation
+    const bundleRes = await request('/api/response/bundle/disp_fp_101', { method: 'POST' });
+    assert(bundleRes.statusCode === 200, '15.1 POST /api/response/bundle/:id returns 200 OK');
+    assert(bundleRes.body.bundle.disputeId === 'disp_fp_101', '15.1 Bundle resolves correct dispute ID');
+    assert(Array.isArray(bundleRes.body.bundle.evidenceDocuments), '15.1 Bundle contains evidenceDocuments array');
+    assert(Array.isArray(bundleRes.body.bundle.analysis.evidenceMatrix), '15.1 Bundle contains Module 3 evidenceMatrix');
+
+    // 15.2: Defense Narrative Generation (INR with Complete Evidence)
+    const genRes = await request('/api/response/generate', {
+      method: 'POST',
+      body: { disputeId: 'disp_fp_101', force: true, useAI: false }
+    });
+    assert(genRes.statusCode === 201, '15.2 POST /api/response/generate returns 201 Created');
+    assert(genRes.body.responsePackage.status === 'DRAFT', '15.2 Initial response status is DRAFT');
+    assert(genRes.body.responsePackage.narrativeSource === 'DETERMINISTIC_FALLBACK', '15.2 Accurately labels narrativeSource as DETERMINISTIC_FALLBACK');
+    assert(typeof genRes.body.responsePackage.characterCount === 'number', '15.2 Response package calculates characterCount');
+    assert(typeof genRes.body.responsePackage.wordCount === 'number', '15.2 Response package calculates wordCount');
+
+    // 15.3: Fact Grounding & Document ID Citation
+    const narrativeText = genRes.body.responsePackage.narrative;
+    assert(narrativeText.includes('9TX4829104821034A'), '15.3 Narrative cites exact transaction ID');
+    assert(narrativeText.includes('249.99'), '15.3 Narrative cites exact disputed amount');
+    assert(narrativeText.includes('Marcus Vance'), '15.3 Narrative cites exact buyer customer name');
+    assert(narrativeText.includes('doc_pod_101') || narrativeText.includes('doc_inv_101') || narrativeText.includes('Doc ID:'), '15.3 Narrative cites verified document ID reference');
+
+    // 15.4: Win Probability Prohibition Safeguard
+    const pkgJson = JSON.stringify(genRes.body.responsePackage);
+    assert(!pkgJson.includes('winProbabilityScore'), '15.4 No winProbabilityScore in response package');
+    assert(!pkgJson.includes('winProbability'), '15.4 No winProbability in response package');
+    assert(!pkgJson.includes('win_probability'), '15.4 No win_probability in response package');
+
+    // 15.5: Explicit Deficiency & Missing Evidence Identification
+    const genSnadRes = await request('/api/response/generate', {
+      method: 'POST',
+      body: { disputeId: 'disp_fp_102', force: true, useAI: false }
+    });
+    assert(genSnadRes.statusCode === 201, '15.5 Generates narrative for dispute with deficiencies');
+    const snadNarrative = genSnadRes.body.responsePackage.narrative;
+    assert(snadNarrative.includes('IDENTIFIED EVIDENCE DEFICIENCIES') || snadNarrative.includes('NEEDS_REVIEW'), '15.5 Narrative explicitly identifies evidence deficiencies');
+
+    // 15.6: Contradiction Identification Safeguard
+    // Test synthetic bundle with postal contradiction
+    const contradictoryAnalysis = {
+      evidenceMatrix: [
+        { requirementId: 'req_pod', requirementText: 'Proof of Delivery', status: 'CONTRADICTED', notes: 'Postal mismatch' }
+      ],
+      missingEvidence: [],
+      contradictions: [
+        { field: 'deliveryPostalCode', sourceA: 'Invoice (97477)', sourceB: 'Carrier (97401)', description: 'Postal code mismatch' }
+      ],
+      unsupportedClaims: [],
+      sourceReferences: ['doc_pod_101'],
+      recommendedActions: []
+    };
+    const mockBundle = {
+      dispute: {
+        id: 'disp_test_contra',
+        paypalDisputeId: 'PP-D-CONTRA',
+        reason: 'MERCHANDISE_OR_SERVICE_NOT_RECEIVED',
+        amount: 100,
+        currency: 'USD',
+        customer: { name: 'Test Customer' }
+      },
+      evidenceDocuments: [{ id: 'doc_pod_101', fileName: 'pod.pdf', documentType: 'PROOF_OF_DELIVERY', mimeType: 'application/pdf' }],
+      analysis: contradictoryAnalysis
+    };
+    const contraNarrative = responseService.buildDeterministicNarrative(mockBundle);
+    assert(contraNarrative.includes('[CONTRADICTION] Field: "deliveryPostalCode"'), '15.6 Narrative explicitly flags contradiction field');
+    assert(contraNarrative.includes('Postal code mismatch'), '15.6 Narrative includes contradiction description');
+
+    // 15.7: Protection Against Silent Draft Overwrite
+    // Edit draft first
+    const editRes = await request('/api/response/disp_fp_101', {
+      method: 'PUT',
+      body: {
+        narrative: 'Merchant edited customized defense text verifying order dispatch.',
+        merchantNotes: 'Directly verified with warehouse shipping lead.'
+      }
+    });
+    assert(editRes.statusCode === 200, '15.7 PUT /api/response/:id updates draft');
+    assert(editRes.body.responsePackage.narrativeSource === 'MERCHANT_EDITED', '15.7 Labels narrativeSource as MERCHANT_EDITED');
+    assert(editRes.body.responsePackage.version >= 2, '15.7 Version number increments after edit');
+
+    // Attempt generate without force -> should be rejected with 409 DRAFT_EXISTS
+    const conflictRes = await request('/api/response/generate', {
+      method: 'POST',
+      body: { disputeId: 'disp_fp_101', force: false }
+    });
+    assert(conflictRes.statusCode === 409, '15.7 Attempt to overwrite edited draft without force returns 409 Conflict');
+    assert(conflictRes.body.code === 'DRAFT_EXISTS', '15.7 Conflict code is DRAFT_EXISTS');
+
+    // Force regeneration succeeds
+    const forceRes = await request('/api/response/generate', {
+      method: 'POST',
+      body: { disputeId: 'disp_fp_101', force: true, useAI: false }
+    });
+    assert(forceRes.statusCode === 201, '15.7 Generation succeeds when force: true is specified');
+
+    // 15.8: Merchant Internal Review Approval Safeguard
+    const approveRes = await request('/api/response/approve', {
+      method: 'POST',
+      body: { disputeId: 'disp_fp_101', approvedBy: 'Finance & Disputes Lead' }
+    });
+    assert(approveRes.statusCode === 200, '15.8 POST /api/response/approve returns 200 OK');
+    assert(approveRes.body.responsePackage.status === 'APPROVED', '15.8 Status transitions to APPROVED');
+    assert(approveRes.body.responsePackage.approval.reviewType === 'MERCHANT_INTERNAL_REVIEW', '15.8 Review type is strictly MERCHANT_INTERNAL_REVIEW');
+    assert(approveRes.body.responsePackage.approval.approvalNotice.includes('internal merchant review'), '15.8 Approval notice disclaims legal signature');
+    assert(!approveRes.body.responsePackage.approval.approvalNotice.includes('cryptographic signature'), '15.8 Does not claim unauthenticated record is cryptographic signature');
+
+    // 15.9: Edit After Approval Resets Status to DRAFT
+    const postApproveEdit = await request('/api/response/disp_fp_101', {
+      method: 'PUT',
+      body: { narrative: 'Revised narrative after initial approval.' }
+    });
+    assert(postApproveEdit.statusCode === 200, '15.9 Editing approved draft succeeds');
+    assert(postApproveEdit.body.responsePackage.status === 'DRAFT', '15.9 Status automatically resets to DRAFT');
+    assert(postApproveEdit.body.responsePackage.approval.isApproved === false, '15.9 Approval flag resets to false upon edit');
+
+    // 15.10: Unapprove Endpoint
+    await request('/api/response/approve', { method: 'POST', body: { disputeId: 'disp_fp_101' } });
+    const unapproveRes = await request('/api/response/unapprove', {
+      method: 'POST',
+      body: { disputeId: 'disp_fp_101' }
+    });
+    assert(unapproveRes.statusCode === 200, '15.10 POST /api/response/unapprove returns 200 OK');
+    assert(unapproveRes.body.responsePackage.status === 'DRAFT', '15.10 Reverts status back to DRAFT');
+
+    // 15.11: Defense Dossier Generation & Schema Validation
+    const exportRes = await request('/api/response/export/disp_fp_101');
+    assert(exportRes.statusCode === 200, '15.11 GET /api/response/export/:id returns 200 OK');
+    const dossier = exportRes.body.dossier;
+    assert(dossier.schemaVersion === '1.0.0', '15.11 Dossier schemaVersion is 1.0.0');
+    assert(Boolean(dossier.dossierId), '15.11 Dossier has stable dossierId');
+    assert(dossier.provenance.dataSource === 'demo', '15.11 Dossier provenance accurately indicates demo data');
+    const dossierValidation = responseService.validateDefenseDossier(dossier);
+    assert(dossierValidation.valid === true, '15.11 Exported dossier satisfies 100% of schema requirements');
+
+    // 15.12: Defense Dossier Attachment Headers
+    const downloadRes = await request('/api/response/export/disp_fp_101?download=true');
+    assert(downloadRes.statusCode === 200, '15.12 Download request returns 200 OK');
+    assert(
+      (downloadRes.headers['content-disposition'] || '').includes('flowpilot-defense-dossier-disp_fp_101.json'),
+      '15.12 Sets attachment header with expected filename'
+    );
+
+    // 15.13: Partial Claim Handling in Narrative
+    const partialRes = await request('/api/response/generate', {
+      method: 'POST',
+      body: { disputeId: 'disp_fp_105', force: true, useAI: false }
+    });
+    assert(partialRes.statusCode === 201, '15.13 Generates narrative for overcharge / partial dispute');
+    assert(partialRes.body.responsePackage.narrative.includes('54.20'), '15.13 Accurately cites disputed amount for partial claim');
+
+    // 15.14: Masked Address Handling
+    const maskedDispute = {
+      id: 'disp_masked_test',
+      paypalDisputeId: 'PP-D-MASKED',
+      reason: 'MERCHANDISE_OR_SERVICE_NOT_RECEIVED',
+      amount: 150,
+      currency: 'USD',
+      customer: { name: 'Masked Customer', shippingAddress: { postalCode: '974**', city: 'Eugene', state: 'OR' } }
+    };
+    const maskedBundle = {
+      dispute: maskedDispute,
+      evidenceDocuments: [{ id: 'doc_masked_pod', fileName: 'carrier.pdf', documentType: 'PROOF_OF_DELIVERY', mimeType: 'application/pdf' }],
+      analysis: {
+        evidenceMatrix: [{ requirementId: 'req_address', requirementText: 'Address Match', status: 'NEEDS_REVIEW', notes: 'Masked postal code requires manual review' }],
+        missingEvidence: [],
+        contradictions: [],
+        unsupportedClaims: [],
+        sourceReferences: ['doc_masked_pod'],
+        recommendedActions: ['Verify delivery postal code against unmasked buyer invoice']
+      }
+    };
+    const maskedNarrative = responseService.buildDeterministicNarrative(maskedBundle);
+    assert(maskedNarrative.includes('NEEDS_REVIEW'), '15.14 Masked address flags NEEDS_REVIEW without claiming false postal match');
+
+    // 15.15: Chronology Delivery After Dispute Creation
+    const chronoBundle = {
+      dispute: {
+        id: 'disp_chrono',
+        paypalDisputeId: 'PP-D-CHRONO',
+        reason: 'MERCHANDISE_OR_SERVICE_NOT_RECEIVED',
+        amount: 200,
+        currency: 'USD',
+        createdAt: '2026-11-01T10:00:00Z',
+        customer: { name: 'Chrono Buyer' }
+      },
+      evidenceDocuments: [{ id: 'doc_chrono_pod', fileName: 'pod.pdf', documentType: 'PROOF_OF_DELIVERY', mimeType: 'application/pdf' }],
+      analysis: {
+        evidenceMatrix: [{ requirementId: 'req_pod', requirementText: 'Proof of Delivery', status: 'SUPPORTED', notes: 'Delivered 2026-11-04 (after dispute filing on 2026-11-01)' }],
+        missingEvidence: [],
+        contradictions: [],
+        unsupportedClaims: [],
+        sourceReferences: ['doc_chrono_pod'],
+        recommendedActions: ['Provide proof of post-filing delivery to PayPal Resolution Center']
+      }
+    };
+    const chronoNarrative = responseService.buildDeterministicNarrative(chronoBundle);
+    assert(chronoNarrative.includes('Delivered 2026-11-04'), '15.15 Objectively notes post-filing delivery date');
+
+    // 15.16: Response Catalog Persistence Across Server Restarts
+    const ResponseServiceClass = responseService.constructor;
+    const restoredResponseService = new ResponseServiceClass(responseService.catalogPath);
+    const restoredPkg = restoredResponseService.getResponsePackage('disp_fp_101');
+    assert(Boolean(restoredPkg), '15.16 Response package persists cleanly in catalog across server restart simulation');
+    assert(restoredPkg.disputeId === 'disp_fp_101', '15.16 Restored response package preserves disputeId');
+
+    // 15.17: Non-existent Dispute Returns 404
+    const notFoundRespRes = await request('/api/response/disp_completely_nonexistent_9999');
+    assert(notFoundRespRes.statusCode === 404, '15.17 GET /api/response/:id for non-existent dispute returns 404 Not Found');
 
     console.log('\n====================================================');
     console.log(`Summary: ${passed} Passed, ${failed} Failed`);
@@ -837,6 +1055,10 @@ Carrier: FedEx Tracking: 781294819201 Delivered`;
     if (server) server.close();
     if (fs.existsSync(metadataPath)) {
       fs.writeFileSync(metadataPath, '[]', 'utf8');
+    }
+    const responseCatalogPath = responseService.catalogPath;
+    if (fs.existsSync(responseCatalogPath)) {
+      fs.writeFileSync(responseCatalogPath, '[]', 'utf8');
     }
   }
 }

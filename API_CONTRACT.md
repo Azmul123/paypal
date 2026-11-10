@@ -229,21 +229,63 @@ interface AIEvidenceAnalysisResult {
 ## 6. Module 4: Dispute Response & Resolution Contract
 
 - **Owner:** Team Member 4
-- **Responsibility:** Compile the final evidence bundle, generate the merchant defense narrative, and submit the response package to PayPal's official Customer Disputes API.
-- **Input:**
-  - `disputeId: string`
-  - `evidenceBundle: { evidenceMatrix: Array<...>, documents: EvidenceDocument[] }`
-  - `narrative: string`
-- **PayPal Authentication:** Obtain the access token via `paypalService.getAccessToken()`.
-- **Expected Output:**
-  ```typescript
-  interface DisputeSubmissionResult {
-    submissionStatus: 'SUBMITTED' | 'PENDING_REVIEW' | 'FAILED';
-    submissionTimestamp: string;
+- **Responsibility:** Compile the final evidence bundle, generate the merchant defense narrative, manage approval state, and format response packages / downloadable Defense Dossiers for PayPal dispute resolution.
+- **Strict Guidelines & Constraints:**
+  1. Only facts supported by dispute records or actual evidence documents may be cited.
+  2. Every factual claim must reference actual document IDs (`doc_ev_*` or demo IDs).
+  3. Prohibited from predicting win probability or calculating win scores.
+  4. Clearly identifies missing and contradictory evidence.
+  5. Never fabricates tracking numbers, delivery confirmations, or customer communications.
+  6. Response approval is designated as `MERCHANT_INTERNAL_REVIEW` in development demo mode.
+
+### Module 4 Available Endpoints
+
+| Method | Endpoint | Description |
+|---|---|---|
+| `GET` | `/api/response/:disputeId` | Retrieves current response package, narrative, and approval status. |
+| `POST` | `/api/response/generate` | Generates evidence-backed defense narrative from Evidence Matrix. |
+| `PUT` | `/api/response/:disputeId` | Updates defense narrative text and merchant notes. Resets approval to DRAFT. |
+| `POST` | `/api/response/approve` | Approves response package under merchant internal review. |
+| `POST` | `/api/response/unapprove` | Reverts approved response package back to editable DRAFT. |
+| `GET` | `/api/response/export/:disputeId` | Exports validated, downloadable JSON Defense Dossier (`?download=true`). |
+| `POST` | `/api/response/bundle/:disputeId` | Compiles raw evidence bundle without generating text. |
+
+### Module 4 Data Contracts
+
+```typescript
+interface ResponsePackage {
+  id: string; // e.g. resp_pkg_disp_fp_101
+  disputeId: string;
+  paypalDisputeId: string;
+  version: number;
+  status: 'DRAFT' | 'APPROVED' | 'SUBMITTED' | 'EXPORTED';
+  narrative: string;
+  narrativeSource: 'GEMINI_AI_SYNTHESIZED' | 'DETERMINISTIC_FALLBACK' | 'MERCHANT_EDITED';
+  characterCount: number;
+  wordCount: number;
+  evidenceBundle: {
+    dispute: FlowPilotDisputeSchema;
+    evidenceDocuments: EvidenceDocument[];
+    analysis: AIEvidenceAnalysisResult;
+  };
+  approval: {
+    isApproved: boolean;
+    approvedBy: string | null;
+    approvedAt: string | null;
+    reviewType: 'MERCHANT_INTERNAL_REVIEW';
+    acknowledgementStatement: string;
+    approvalNotice?: string;
+  };
+  submission: {
+    status: 'NOT_SUBMITTED' | 'SUBMITTED' | 'FAILED' | 'EXPORTED_ONLY';
+    timestamp: string | null;
     paypalAcknowledgementId?: string;
     errorMessage?: string;
-  }
-  ```
+  };
+  createdAt: string;
+  updatedAt: string;
+}
+```
 
 ---
 
